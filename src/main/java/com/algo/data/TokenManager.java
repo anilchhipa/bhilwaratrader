@@ -1,56 +1,66 @@
 package com.algo.data;
 
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
-import com.angelbroking.smartapi.smartstream.models.ExchangeType;
+import java.util.Set;
 
 public class TokenManager {
-    private Map<String, String> symbolToToken = new HashMap<>();
-    private Map<String, String> tokenToSymbol = new HashMap<>();
-    private Map<String, ExchangeType> symbolToExchange = new HashMap<>();
+    private Map<String, String> symbolToToken = new ConcurrentHashMap<>();
+    private Map<String, String> tokenToSymbol = new ConcurrentHashMap<>();
+    private Map<String, String> symbolToExchange = new ConcurrentHashMap<>();
 
     public TokenManager() {
-        // Indices
-        // add("NIFTY", "99926000", ExchangeType.NSE_CM); // NSE Index
-        // add("BANKNIFTY", "99926009", ExchangeType.NSE_CM); // NSE Index
-        // add("SENSEX", "1", ExchangeType.BSE_CM); // BSE Index
-
-        // Sensex Options
-        add("SENSEX2620583300CE", "823275", ExchangeType.BSE_FO);
-        add("SENSEX2620584000PE", "823265", ExchangeType.BSE_FO);
-
-        // Nifty Options (Example)
-        // add("NIFTY26FEB22000CE", "35000", ExchangeType.NFO);
-        // add("NIFTY26FEB22000PE", "35001", ExchangeType.NFO);
+        // Symbols will be loaded from DB and registered via register()
     }
 
-    private void add(String symbol, String token) {
-        add(symbol, token, ExchangeType.NSE_CM); // Default
+    /**
+     * Unregister a symbol.
+     */
+    public void removeSymbol(String symbol) {
+        String token = symbolToToken.remove(symbol);
+        if (token != null) {
+            tokenToSymbol.remove(token);
+        }
+        symbolToExchange.remove(symbol);
     }
 
-    private void add(String symbol, String token, ExchangeType exchangeType) {
+    public void register(String symbol, String exchange) {
+        // ConcurrentHashMap doesn't allow null values. We'll leave the token as absent
+        // until resolved.
+        symbolToExchange.put(symbol, exchange);
+    }
+
+    /** Called by ZerodhaClient.resolveTokens() after fetching from Kite API. */
+    public void updateToken(String symbol, String token) {
         symbolToToken.put(symbol, token);
         tokenToSymbol.put(token, symbol);
-        symbolToExchange.put(symbol, exchangeType);
     }
 
     public String getToken(String symbol) {
         return symbolToToken.get(symbol);
     }
 
-    public ExchangeType getExchangeType(String symbol) {
-        return symbolToExchange.getOrDefault(symbol, ExchangeType.NSE_CM);
+    public String getExchangeType(String symbol) {
+        return symbolToExchange.getOrDefault(symbol, "NSE");
     }
 
     public String getSymbol(String token) {
         if (token == null)
             return null;
-        String trimmed = token.trim();
-        String symbol = tokenToSymbol.get(trimmed);
-        return symbol;
+        return tokenToSymbol.get(token.trim());
     }
 
-    public java.util.Set<String> getAllSymbols() {
-        return symbolToToken.keySet();
+    public Set<String> getAllSymbols() {
+        return symbolToExchange.keySet();
+    }
+
+    /** Returns only symbols that have a resolved token (ready for subscription). */
+    public Set<String> getResolvedTokens() {
+        Set<String> tokens = new java.util.HashSet<>();
+        for (Map.Entry<String, String> e : symbolToToken.entrySet()) {
+            if (e.getValue() != null)
+                tokens.add(e.getValue());
+        }
+        return tokens;
     }
 }

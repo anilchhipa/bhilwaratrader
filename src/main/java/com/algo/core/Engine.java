@@ -7,9 +7,10 @@ import com.algo.web.LiveUpdateBroadcaster;
 import org.json.JSONObject;
 import java.util.Map;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
+import java.util.Collections;
 
 /**
  * The central brain of the application.
@@ -21,24 +22,73 @@ public class Engine {
     private final RedisClient redisClient;
     private final TimescaleRepository timescaleRepository;
     private final LiveUpdateBroadcaster broadcaster;
+    private final IndicatorConfig indicatorConfig;
 
     public Engine(TokenManager tokenManager, RedisClient redisClient, TimescaleRepository timescaleRepository,
-            LiveUpdateBroadcaster broadcaster) {
+            LiveUpdateBroadcaster broadcaster, IndicatorConfig indicatorConfig) {
         this.tokenManager = tokenManager;
         this.redisClient = redisClient;
         this.timescaleRepository = timescaleRepository;
         this.broadcaster = broadcaster;
+        this.indicatorConfig = indicatorConfig;
+
+        System.out.println("Engine: Using " + indicatorConfig);
 
         // Initialize state for all tracked symbols
         for (String symbol : tokenManager.getAllSymbols()) {
-            symbolStates.put(symbol, new SymbolState(symbol));
+            registerSymbol(symbol);
         }
+    }
+
+    /**
+     * Initializes state for a new symbol.
+     */
+    public void registerSymbol(String symbol) {
+        if (!symbolStates.containsKey(symbol)) {
+            symbolStates.put(symbol, new SymbolState(symbol, this::onCandleComplete, indicatorConfig));
+            System.out.println("Engine: Registered " + symbol);
+        }
+    }
+
+    /**
+     * Removes state for a symbol.
+     */
+    public void unregisterSymbol(String symbol) {
+        symbolStates.remove(symbol);
+        System.out.println("Engine: Unregistered " + symbol);
+    }
+
+    /**
+     * Callback triggered by SymbolState when a timeframe interval closes.
+     */
+    private void onCandleComplete(String symbol, String timeframe, Candle completedCandle) {
+        if (timescaleRepository == null)
+            return;
+
+        // Save the completed candle to the database asynchronously to avoid blocking
+        // the tick thread
+        CompletableFuture.runAsync(() -> {
+            try {
+                if (symbol != null) {
+                    timescaleRepository.saveCandles(Collections.singletonList(completedCandle), symbol, timeframe);
+                    System.out.println("Live sync: Saved 1 complete candle for " + symbol + " (" + timeframe + ")");
+                }
+            } catch (Exception e) {
+                System.err.println("Error async saving continuous candle: " + e.getMessage());
+            }
+        });
     }
 
     public void onTick(String token, double price) {
         String symbol = tokenManager.getSymbol(token);
-        if (symbol == null)
+        if (symbol == null) {
             return;
+        }
+
+        // Temporary diagnostic for symbol cross-pollination
+        if (price > 1000 && !symbol.equals("RELIANCE")) {
+            System.out.println("Engine DIAGNOSTIC: Token " + token + " (" + symbol + ") received high price: " + price);
+        }
 
         SymbolState state = symbolStates.get(symbol);
         if (state != null) {
@@ -75,20 +125,22 @@ public class Engine {
     }
 
     /**
-     * Call this at 3:16 PM to flush all accumulated session data to database.
+     * Called at 3:30 PM (market close) to flush all active/incomplete session data
+     * to database.
      */
     public void flushSessionToDatabase() {
         if (timescaleRepository == null)
             return;
 
-        System.out.println("Engine: Flushing full session data to TimescaleDB...");
+        System.out.println("Engine: Flushing active final candles to TimescaleDB...");
         for (SymbolState state : symbolStates.values()) {
-            Map<String, List<Candle>> sessionData = state.getAndClearSessionCandles();
-            for (String tf : sessionData.keySet()) {
-                List<Candle> candles = sessionData.get(tf);
+            Map<String, List<Candle>> activeData = state.getActiveCandles();
+            for (String tf : activeData.keySet()) {
+                List<Candle> candles = activeData.get(tf);
                 if (!candles.isEmpty()) {
                     System.out.println(
-                            "  Flushing " + candles.size() + " candles for " + state.getSymbol() + " (" + tf + ")");
+                            "  Flushing " + candles.size() + " partial/final candle(s) for " + state.getSymbol() + " ("
+                                    + tf + ")");
                     int saved = timescaleRepository.saveCandles(candles, state.getSymbol(), tf);
                     System.out.println("  Saved " + saved + " candles.");
                 }

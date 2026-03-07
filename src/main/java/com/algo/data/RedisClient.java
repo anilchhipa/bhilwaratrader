@@ -61,6 +61,33 @@ public class RedisClient {
         }
     }
 
+    public void clearSymbolData(String symbol) {
+        if (jedisPool == null)
+            return;
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Find all keys for this symbol (OHLC, INDICATORS, HISTORY)
+            String pattern = symbol + ":*";
+            java.util.Set<String> keys = jedis.keys(pattern);
+            if (keys != null && !keys.isEmpty()) {
+                jedis.del(keys.toArray(new String[0]));
+                System.out.println("RedisClient: Flushed " + keys.size() + " keys for " + symbol);
+            }
+        } catch (Exception e) {
+            System.err.println("Redis Flush Error: " + e.getMessage());
+        }
+    }
+
+    public void flushAll() {
+        if (jedisPool == null)
+            return;
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.flushAll();
+            System.out.println("RedisClient: FLUSHED ALL REDIS DATA");
+        } catch (Exception e) {
+            System.err.println("Redis Flush All Error: " + e.getMessage());
+        }
+    }
+
     public void close() {
         if (jedisPool != null) {
             jedisPool.close();

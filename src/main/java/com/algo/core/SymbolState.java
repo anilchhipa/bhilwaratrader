@@ -9,10 +9,14 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class SymbolState {
     private final String symbol;
-    private final String[] timeframes = { "1min", "3min", "5min", "10min", "15min", "30min", "1h" };
+    private final String[] timeframes = { "1min", "3min", "5min", "15min" };
 
     // Timeframe -> Candle
     private final Map<String, Candle> currentCandles = new ConcurrentHashMap<>();
+
+    // Keep track of the last stable price from the last closed candle for outlier
+    // detection
+    private final Map<String, Double> lastStablePrices = new ConcurrentHashMap<>();
 
     // Timeframe -> (IndicatorName -> Value)
     private final Map<String, Map<String, Double>> indicatorValues = new ConcurrentHashMap<>();
@@ -20,22 +24,48 @@ public class SymbolState {
     // Timeframe -> Strategy (Original Desktop Logic)
     private final Map<String, Strategy> strategies = new ConcurrentHashMap<>();
 
-    // Timeframe -> List of candles generated during the current session (for
-    // flushing)
-    private final Map<String, java.util.List<Candle>> sessionCandles = new ConcurrentHashMap<>();
+    @FunctionalInterface
+    public interface CandleCompleteListener {
+        void onComplete(String symbol, String timeframe, Candle candle);
+    }
 
-    public SymbolState(String symbol) {
+    // Callback when a candle is completed
+    private CandleCompleteListener onCandleComplete;
+
+    public SymbolState(String symbol, CandleCompleteListener onCandleComplete, IndicatorConfig indicatorConfig) {
         this.symbol = symbol;
+        this.onCandleComplete = onCandleComplete;
         for (String tf : timeframes) {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
-            strategies.put(tf, new Strategy(15, 7, 3.0));
-            sessionCandles.put(tf, java.util.Collections.synchronizedList(new java.util.ArrayList<>()));
+            strategies.put(tf, new Strategy(indicatorConfig));
         }
     }
 
     public void update(double price, java.time.LocalDateTime time) {
         for (String tf : timeframes) {
             updateTimeframe(tf, price, time);
+        }
+    }
+
+    /**
+     * Seeds historical candles into the Strategy object to warm up EMAs, MACD, etc.
+     * This avoids firing the onCandleComplete callback for past data.
+     */
+    public void seedHistory(String tf, java.util.List<Candle> historicalCandles) {
+        Strategy strategy = strategies.get(tf);
+        if (strategy == null || historicalCandles == null || historicalCandles.isEmpty()) {
+            return;
+        }
+
+        for (Candle c : historicalCandles) {
+            // Feed into strategy to warm up the state (EMAs, MACD, etc).
+            strategy.onNewCandle(c);
+
+            // Set as the current active candle baseline
+            currentCandles.put(tf, c);
+
+            // SEED STABLE PRICE for Outlier Filter immediately from history
+            lastStablePrices.put(tf, c.getClose());
         }
     }
 
@@ -46,9 +76,16 @@ public class SymbolState {
         if (current == null || start.isAfter(current.getTimestamp())) {
             // New Candle Started
             if (current != null) {
-                // Before starting a new candle, add the previous one to session collection
-                sessionCandles.get(tf).add(current);
+                lastStablePrices.put(tf, current.getClose());
+                if (onCandleComplete != null) {
+                    // Emit the completed candle immediately
+                    onCandleComplete.onComplete(this.symbol, tf, current);
+                }
             }
+
+            // Removal of the redundant first-tick-seeding block in updateTimeframe
+            // as it's now handled by seedHistory or will be naturally set on first candle
+            // close.
 
             current = new Candle(price, price, price, price, 0, start);
             currentCandles.put(tf, current);
@@ -56,6 +93,21 @@ public class SymbolState {
             // Update Strategy (New Candle Mode)
             strategies.get(tf).onNewCandle(current);
         } else {
+            // Price Spike Filter: Ignore ticks that deviate more than 50% from the last
+            // closed
+            // candle's price.
+            // This prevents "random fluctuations" (bad ticks) from permanently skewing
+            // High/Low.
+            Double stablePrice = lastStablePrices.get(tf);
+            if (stablePrice != null && stablePrice > 0) {
+                double deviation = Math.abs(price - stablePrice) / stablePrice;
+                if (deviation > 0.5) {
+                    System.err.println("SymbolState [" + symbol + " " + tf + "]: Ignored outlier tick " + price
+                            + " (deviation: " + (deviation * 100) + "% from stable " + stablePrice + ")");
+                    return;
+                }
+            }
+
             // Update existing candle
             current.setHigh(Math.max(current.getHigh(), price));
             current.setLow(Math.min(current.getLow(), price));
@@ -71,24 +123,18 @@ public class SymbolState {
     }
 
     /**
-     * Gets and clears the session candles for flushing to DB.
-     * Note: This includes the current incomplete candle if desired,
-     * but we usually only flush closed candles or all at session end.
+     * Gets the active (current) candles for all timeframes.
+     * Useful for forcing a flush of the final incomplete candles at session close.
      */
-    public Map<String, java.util.List<Candle>> getAndClearSessionCandles() {
+    public Map<String, java.util.List<Candle>> getActiveCandles() {
         Map<String, java.util.List<Candle>> result = new java.util.HashMap<>();
         for (String tf : timeframes) {
-            java.util.List<Candle> candles = sessionCandles.get(tf);
-            synchronized (candles) {
-                // Add the latest (possibly incomplete) candle as well if it exists
-                Candle current = currentCandles.get(tf);
-                java.util.List<Candle> toFlush = new java.util.ArrayList<>(candles);
-                if (current != null && !toFlush.contains(current)) {
-                    toFlush.add(current);
-                }
-                result.put(tf, toFlush);
-                candles.clear();
+            Candle current = currentCandles.get(tf);
+            java.util.List<Candle> list = new java.util.ArrayList<>();
+            if (current != null) {
+                list.add(current);
             }
+            result.put(tf, list);
         }
         return result;
     }
@@ -97,30 +143,31 @@ public class SymbolState {
         Strategy strategy = strategies.get(tf);
         Map<String, Double> values = indicatorValues.get(tf);
 
-        // Populate cascaded EMAs
-        values.put("EMA15", strategy.getEma15());
-        values.put("EMA15_5", strategy.getEma15_5());
-        values.put("EMA15_15", strategy.getEma15_15());
-        values.put("EMA15_15_15", strategy.getEma15_15_15());
-        values.put("EMA15_30", strategy.getEma15_15_15_30());
+        // Populate indicators using a safe put method for ConcurrentHashMap
+        safePut(values, "EMA15", strategy.getEma15());
+        safePut(values, "EMA15_5", strategy.getEma15_5());
+        safePut(values, "EMA15_15", strategy.getEma15_15());
+        safePut(values, "EMA15_15_15", strategy.getEma15_15_15());
+        safePut(values, "EMA15_15_15_15", strategy.getEma15_15_15_15());
+        safePut(values, "EMA15_15_15_15_30", strategy.getEma15_15_15_15_30());
 
-        // Populate additional indicators
-        values.put("EMA50", strategy.getEma15()); // Note: Strategy seems to use ema15 field internally differently?
-                                                  // Checking getEma50() would be better but Strategy doesn't have it as
-                                                  // a direct getter for all.
-                                                  // Actually Strategy has fields ema50, ema100. Let's stick to what's
-                                                  // in populateCandleIndicators
+        safePut(values, "EMA50", current.getEma50());
+        safePut(values, "EMA100", current.getEma100());
+        safePut(values, "MACD", current.getMacdLine());
+        safePut(values, "SIGNAL", current.getSignalLine());
+        safePut(values, "MACD5", current.getMacd5());
+        safePut(values, "MACD55", current.getMacd55());
+        safePut(values, "EMA5", current.getEma15_15_15_15_30());
+        safePut(values, "ST_MA", current.getStMa());
+        safePut(values, "ST_UP", current.getStUp());
+        safePut(values, "ST_DN", current.getStDn());
+        safePut(values, "ST_TREND", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
+    }
 
-        values.put("EMA50", current.getEma50());
-        values.put("EMA100", current.getEma100());
-        values.put("MACD", current.getMacdLine());
-        values.put("SIGNAL", current.getSignalLine());
-        values.put("MACD5", current.getMacd5());
-        values.put("MACD55", current.getMacd55());
-        values.put("ST_MA", current.getStMa());
-        values.put("ST_UP", current.getStUp());
-        values.put("ST_DN", current.getStDn());
-        values.put("ST_TREND", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
+    private void safePut(Map<String, Double> map, String key, Double value) {
+        if (value != null) {
+            map.put(key, value);
+        }
     }
 
     private java.time.LocalDateTime getIntervalStartTime(java.time.LocalDateTime time, String interval) {
@@ -135,17 +182,8 @@ public class SymbolState {
             case "5min":
                 minutes = 5;
                 break;
-            case "10min":
-                minutes = 10;
-                break;
             case "15min":
                 minutes = 15;
-                break;
-            case "30min":
-                minutes = 30;
-                break;
-            case "1h":
-                minutes = 60;
                 break;
             default:
                 minutes = 1;

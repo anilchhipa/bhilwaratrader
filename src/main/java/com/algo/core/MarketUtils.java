@@ -70,14 +70,6 @@ public class MarketUtils {
     }
 
     /**
-     * Checks if it's currently time to flush data (e.g., 3:16 PM)
-     */
-    public static boolean isFlushTime() {
-        LocalTime time = LocalTime.now();
-        return time.getHour() == 15 && time.getMinute() >= 16 && time.getMinute() < 20;
-    }
-
-    /**
      * Checks if the market session is over (after 3:30 PM)
      */
     public static boolean isPostMarket() {

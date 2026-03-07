@@ -16,6 +16,6 @@ public class LiveUpdateBroadcaster {
         payload.put("ohlc", ohlc);
         payload.put("indicators", indicators);
 
-        messagingTemplate.convertAndSend("/topic/updates", payload.toString());
+        messagingTemplate.convertAndSend("/topic/updates/" + symbol + "/" + interval, payload.toString());
     }
 }

@@ -14,8 +14,7 @@ public class MarketSessionManager {
     private final HistoricalDataService historicalDataService;
     private final TokenManager tokenManager;
 
-    private boolean preMarketDone = false;
-    private boolean flushDone = false;
+    private boolean initialized = false;
 
     public MarketSessionManager(Engine engine, HistoricalDataService historicalDataService,
             TokenManager tokenManager) {
@@ -25,67 +24,57 @@ public class MarketSessionManager {
     }
 
     /**
-     * Main task that runs every minute to check session state.
+     * Main task that runs every minute to check if initialization is needed.
+     * In a continuous architecture, we just need to ensure we caught up on missing
+     * data.
      */
     @Scheduled(cron = "0 * * * * MON-FRI")
     public void checkSession() {
-        if (MarketUtils.isPreMarket()) {
-            handlePreMarket();
-        } else if (MarketUtils.isFlushTime()) {
-            handleFlush();
-        } else if (MarketUtils.isPostMarket()) {
-            handlePostMarket();
-        } else {
-            // During live market hours
-            resetFlags();
+        if (!initialized) {
+            handleInitialization();
+        }
+
+        // At the end of the day or completely post-market, we can force a final flush
+        // of active/incomplete candles
+        if (MarketUtils.isPostMarket() && initialized) {
+            System.out.println("MarketSessionManager: Market is closed. Flushing final active candles...");
+            engine.flushSessionToDatabase();
+
+            // Optionally reset initialization for the next day, though usually the app
+            // restarts
+            initialized = false;
         }
     }
 
-    private void handlePreMarket() {
-        if (preMarketDone)
-            return;
-
-        System.out.println("MarketSessionManager: Starting Pre-Market logic...");
+    private void handleInitialization() {
+        System.out.println("MarketSessionManager: Starting initialization/sync logic...");
         for (String symbol : tokenManager.getAllSymbols()) {
             String token = tokenManager.getToken(symbol);
             if (token != null) {
+                // This checks the DB and syncs missing candles up to the current time
                 historicalDataService.loadInitialData(symbol, token);
+
+                // Also trigger an explicit sync of missing live data just in case
+                // loadInitialData
+                // only grabbed the 500 minimum and missed the last few minutes
+                for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                    historicalDataService.syncData(symbol, token, tf);
+                }
             }
         }
 
         // Sync these to Redis so the UI is populated
         historicalDataService.syncAllSymbolsToRedis(engine);
 
-        preMarketDone = true;
-        flushDone = false;
-        System.out.println("MarketSessionManager: Pre-Market logic completed.");
-    }
-
-    private void handleFlush() {
-        if (flushDone)
-            return;
-
-        System.out.println("MarketSessionManager: It's 3:16 PM! Triggering session flush...");
-        engine.flushSessionToDatabase();
-        flushDone = true;
-        System.out.println("MarketSessionManager: Flush completed.");
-    }
-
-    private void handlePostMarket() {
-        // Any post-market cleanup if needed
-    }
-
-    private void resetFlags() {
-        // Reset flags for the next session if we are in the middle of a session
-        if (preMarketDone && flushDone) {
-            // This is just a placeholder, logic for full day reset would go here
-        }
+        initialized = true;
+        System.out.println(
+                "MarketSessionManager: Initialization completed. Transitioning to continuous live data processing.");
     }
 
     /**
      * Manual trigger for pre-market sync (e.g., if app started late)
      */
     public void triggerManualPreMarketSync() {
-        handlePreMarket();
+        handleInitialization();
     }
 }

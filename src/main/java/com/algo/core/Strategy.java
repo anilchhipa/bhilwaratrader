@@ -8,13 +8,15 @@ public class Strategy {
     private double ema15_5 = 0;
     private double ema15_15 = 0;
     private double ema15_15_15 = 0;
-    private double ema15_15_15_30 = 0;
+    private double ema15_15_15_15 = 0;
+    private double ema15_15_15_15_30 = 0;
 
     private List<Double> ema15History = new ArrayList<>();
     private List<Double> ema15_5History = new ArrayList<>();
     private List<Double> ema15_15History = new ArrayList<>();
     private List<Double> ema15_15_15History = new ArrayList<>();
-    private List<Double> ema15_15_15_30History = new ArrayList<>();
+    private List<Double> ema15_15_15_15History = new ArrayList<>();
+    private List<Double> ema15_15_15_15_30History = new ArrayList<>();
 
     // MACD variables
     private double ema50 = 0;
@@ -34,32 +36,65 @@ public class Strategy {
     private double ema15_5_stable = 0;
     private double ema15_15_stable = 0;
     private double ema15_15_15_stable = 0;
-    private double ema15_15_15_30_stable = 0;
+    private double ema15_15_15_15_stable = 0;
+    private double ema15_15_15_15_30_stable = 0;
     private double ema50_stable = 0;
     private double ema100_stable = 0;
-    private double macdLine_stable = 0;
     private double signalLine_stable = 0;
     private double maed_5_stable = 0;
     private double macd_5_5_stable = 0;
 
     private com.algo.indicators.SuperTrendedMA stma;
-    private int stableHistorySize = 0;
 
-    public Strategy(int unused1, int unused2, double unused3) {
-        this.stma = new com.algo.indicators.SuperTrendedMA(100, 10, 0.5, true);
+    // --- Config-driven periods ---
+    private final int p1; // EMA base period
+    private final int c1; // EMA cascade 1
+    private final int c2; // EMA cascade 2
+    private final int c3; // EMA cascade 3
+    private final int c4; // EMA cascade 4
+    private final int c5; // EMA cascade 5
+    private final int emaFast; // EMA fast (e.g. 50)
+    private final int emaSlow; // EMA slow (e.g. 100)
+    private final int macdSig; // MACD signal period
+    private final int macdSig2; // MACD signal cascade period
+    private final boolean calculateMacd;
+
+    public Strategy(IndicatorConfig config) {
+        this.p1 = config.getEmaPeriod1();
+        this.c1 = config.getEmaCascade1();
+        this.c2 = config.getEmaCascade2();
+        this.c3 = config.getEmaCascade3();
+        this.c4 = config.getEmaCascade4();
+        this.c5 = config.getEmaCascade5();
+        this.emaFast = config.getEmaFast();
+        this.emaSlow = config.getEmaSlow();
+        this.macdSig = config.getMacdSignal();
+        this.macdSig2 = config.getMacdSignal2();
+        this.calculateMacd = config.isMacdShowEMAs();
+        this.stma = new com.algo.indicators.SuperTrendedMA(
+                config.getStMaLength(),
+                config.getStAtrPeriod(),
+                config.getStMultiplier(),
+                true);
     }
 
     public void onNewCandle(Candle candle) {
-        updateIndicators(candle.getLow(), false);
-        stma.update(candle);
+        // 1. Commit the PREVIOUS candle's final live values to the stable baseline
+        // BEFORE we start calculating the new candle.
         updateSnapshots();
-        stableHistorySize = ema15History.size();
+        stma.commit();
+
+        // 2. Calculate the first tick of the NEW candle
+        updateIndicators(candle.getClose(), false);
+        stma.update(candle);
+
         populateCandleIndicators(candle);
     }
 
     public void updateLastCandle(Candle candle) {
-        boolean isFirstTick = (ema15History.size() == stableHistorySize);
-        updateIndicators(candle.getLow(), !isFirstTick);
+        // Always calculate live updates from the STABLE baseline (updateLast = true)
+        // so that intra-candle volatility doesn't permanently skew the EMAs
+        updateIndicators(candle.getClose(), true);
         stma.updateLive(candle);
         populateCandleIndicators(candle);
     }
@@ -69,7 +104,8 @@ public class Strategy {
         candle.setEma15_5(ema15_5);
         candle.setEma15_15(ema15_15);
         candle.setEma15_15_15(ema15_15_15);
-        candle.setEma15_30(ema15_15_15_30);
+        candle.setEma15_15_15_15(ema15_15_15_15);
+        candle.setEma15_15_15_15_30(ema15_15_15_15_30);
 
         candle.setEma50(ema50);
         candle.setEma100(ema100);
@@ -108,60 +144,70 @@ public class Strategy {
             history.remove(0);
     }
 
-    private void updateIndicators(double price) {
-        updateIndicators(price, false);
-    }
-
     private void updateIndicators(double price, boolean updateLast) {
         if (updateLast) {
             // Revert to stable values before calculating the update for this tick
-            ema15 = calculateEMA(price, ema15_stable, 15);
-            ema15_5 = calculateEMA(ema15, ema15_5_stable, 5);
-            ema15_15 = calculateEMA(ema15, ema15_15_stable, 15);
-            ema15_15_15 = calculateEMA(ema15_15, ema15_15_15_stable, 15);
-            ema15_15_15_30 = calculateEMA(ema15_15_15, ema15_15_15_30_stable, 30);
+            ema15 = calculateEMA(price, ema15_stable, p1);
+            ema15_5 = calculateEMA(ema15, ema15_5_stable, c1);
+            ema15_15 = calculateEMA(ema15, ema15_15_stable, c2);
+            ema15_15_15 = calculateEMA(ema15_15, ema15_15_15_stable, c3);
+            ema15_15_15_15 = calculateEMA(ema15_15_15, ema15_15_15_15_stable, c4);
 
-            ema50 = calculateEMA(price, ema50_stable, 50);
-            ema100 = calculateEMA(price, ema100_stable, 100);
-            macdLine = ema50 - ema100;
-            signalLine = calculateEMA(macdLine, signalLine_stable, 5);
+            ema15_15_15_15_30 = calculateEMA(ema15_15_15_15, ema15_15_15_15_30_stable, c5);
 
-            maed_5 = calculateEMA(signalLine, maed_5_stable, 5);
-            macd_5_5 = calculateEMA(maed_5, macd_5_5_stable, 5);
+            if (calculateMacd) {
+                ema50 = calculateEMA(price, ema50_stable, emaFast);
+                ema100 = calculateEMA(price, ema100_stable, emaSlow);
+                macdLine = ema50 - ema100;
+                signalLine = calculateEMA(macdLine, signalLine_stable, macdSig);
+
+                maed_5 = calculateEMA(signalLine, maed_5_stable, macdSig);
+                macd_5_5 = calculateEMA(maed_5, macd_5_5_stable, macdSig2);
+            }
 
             updateLastInHistory(ema15History, ema15);
             updateLastInHistory(ema15_5History, ema15_5);
             updateLastInHistory(ema15_15History, ema15_15);
             updateLastInHistory(ema15_15_15History, ema15_15_15);
-            updateLastInHistory(ema15_15_15_30History, ema15_15_15_30);
-            updateLastInHistory(macdHistory, macdLine);
-            updateLastInHistory(signalHistory, signalLine);
-            updateLastInHistory(maed5History, maed_5);
-            updateLastInHistory(macd55History, macd_5_5);
+            updateLastInHistory(ema15_15_15_15History, ema15_15_15_15);
+            updateLastInHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
+            if (calculateMacd) {
+                updateLastInHistory(macdHistory, macdLine);
+                updateLastInHistory(signalHistory, signalLine);
+                updateLastInHistory(maed5History, maed_5);
+                updateLastInHistory(macd55History, macd_5_5);
+            }
         } else {
-            ema15 = calculateEMA(price, ema15, 15);
-            ema15_5 = calculateEMA(ema15, ema15_5, 5);
-            ema15_15 = calculateEMA(ema15, ema15_15, 15);
-            ema15_15_15 = calculateEMA(ema15_15, ema15_15_15, 15);
-            ema15_15_15_30 = calculateEMA(ema15_15_15, ema15_15_15_30, 30);
+            ema15 = calculateEMA(price, ema15, p1);
+            ema15_5 = calculateEMA(ema15, ema15_5, c1);
+            ema15_15 = calculateEMA(ema15, ema15_15, c2);
+            ema15_15_15 = calculateEMA(ema15_15, ema15_15_15, c3);
+            ema15_15_15_15 = calculateEMA(ema15_15_15, ema15_15_15_15, c4);
 
-            ema50 = calculateEMA(price, ema50, 50);
-            ema100 = calculateEMA(price, ema100, 100);
-            macdLine = ema50 - ema100;
-            signalLine = calculateEMA(macdLine, signalLine, 5);
+            ema15_15_15_15_30 = calculateEMA(ema15_15_15_15, ema15_15_15_15_30, c5);
 
-            maed_5 = calculateEMA(signalLine, maed_5, 5);
-            macd_5_5 = calculateEMA(maed_5, macd_5_5, 5);
+            if (calculateMacd) {
+                ema50 = calculateEMA(price, ema50, emaFast);
+                ema100 = calculateEMA(price, ema100, emaSlow);
+                macdLine = ema50 - ema100;
+                signalLine = calculateEMA(macdLine, signalLine, macdSig);
+
+                maed_5 = calculateEMA(signalLine, maed_5, macdSig);
+                macd_5_5 = calculateEMA(maed_5, macd_5_5, macdSig2);
+            }
 
             addToHistory(ema15History, ema15);
             addToHistory(ema15_5History, ema15_5);
             addToHistory(ema15_15History, ema15_15);
             addToHistory(ema15_15_15History, ema15_15_15);
-            addToHistory(ema15_15_15_30History, ema15_15_15_30);
-            addToHistory(macdHistory, macdLine);
-            addToHistory(signalHistory, signalLine);
-            addToHistory(maed5History, maed_5);
-            addToHistory(macd55History, macd_5_5);
+            addToHistory(ema15_15_15_15History, ema15_15_15_15);
+            addToHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
+            if (calculateMacd) {
+                addToHistory(macdHistory, macdLine);
+                addToHistory(signalHistory, signalLine);
+                addToHistory(maed5History, maed_5);
+                addToHistory(macd55History, macd_5_5);
+            }
         }
     }
 
@@ -170,13 +216,16 @@ public class Strategy {
         ema15_5_stable = ema15_5;
         ema15_15_stable = ema15_15;
         ema15_15_15_stable = ema15_15_15;
-        ema15_15_15_30_stable = ema15_15_15_30;
-        ema50_stable = ema50;
-        ema100_stable = ema100;
-        macdLine_stable = macdLine;
-        signalLine_stable = signalLine;
-        maed_5_stable = maed_5;
-        macd_5_5_stable = macd_5_5;
+        ema15_15_15_15_stable = ema15_15_15_15;
+        ema15_15_15_15_30_stable = ema15_15_15_15_30;
+
+        if (calculateMacd) {
+            ema50_stable = ema50;
+            ema100_stable = ema100;
+            signalLine_stable = signalLine;
+            maed_5_stable = maed_5;
+            macd_5_5_stable = macd_5_5;
+        }
     }
 
     private void updateLastInHistory(List<Double> history, double value) {
@@ -201,8 +250,8 @@ public class Strategy {
         return ema15_15_15;
     }
 
-    public double getEma15_15_15_30() {
-        return ema15_15_15_30;
+    public double getEma15_15_15_15() {
+        return ema15_15_15_15;
     }
 
     public List<Double> getEma15History() {
@@ -221,8 +270,8 @@ public class Strategy {
         return ema15_15_15History;
     }
 
-    public List<Double> getEma15_15_15_30History() {
-        return ema15_15_15_30History;
+    public List<Double> getEma15_15_15_15History() {
+        return ema15_15_15_15History;
     }
 
     public List<Double> getMacdHistory() {
@@ -243,5 +292,13 @@ public class Strategy {
 
     public com.algo.indicators.SuperTrendedMA getStma() {
         return stma;
+    }
+
+    public double getEma15_15_15_15_30() {
+        return ema15_15_15_15_30;
+    }
+
+    public List<Double> getEma15_15_15_15_30History() {
+        return ema15_15_15_15_30History;
     }
 }

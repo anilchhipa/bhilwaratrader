@@ -25,6 +25,15 @@ public class SuperTrendedMA {
     private int prevTrend = 1;
     private double lastAtr = 0;
     private double lastClose = 0;
+
+    // Live variables to hold the temporary calculation before commit
+    private double liveEma = 0;
+    private double liveUp = 0;
+    private double liveDn = 0;
+    private int liveTrend = 1;
+    private double liveAtr = 0;
+    private double liveClose = 0;
+
     private int stableHistorySize = 0;
 
     public SuperTrendedMA(int maLength, int atrPeriod, double multiplier, boolean changeATR) {
@@ -34,17 +43,27 @@ public class SuperTrendedMA {
         this.changeATR = changeATR;
     }
 
+    public void commit() {
+        lastEma = liveEma;
+        lastUp = liveUp;
+        lastDn = liveDn;
+        prevTrend = trend;
+        trend = liveTrend;
+        lastAtr = liveAtr;
+        lastClose = liveClose;
+    }
+
     public void update(Candle candle) {
-        calculateInternal(candle, false);
+        calculateInternal(candle, true); // true = isNewCandle (appends to lists)
         stableHistorySize = maHistory.size();
         limitHistory();
     }
 
     public void updateLive(Candle candle) {
-        calculateInternal(candle, true);
+        calculateInternal(candle, false); // false = not new candle (overwrites last in lists)
     }
 
-    private void calculateInternal(Candle candle, boolean isLive) {
+    private void calculateInternal(Candle candle, boolean isNewCandle) {
         double close = candle.getClose();
         double high = candle.getHigh();
         double low = candle.getLow();
@@ -63,29 +82,17 @@ public class SuperTrendedMA {
 
         // Calculate ATR
         double currentAtr = 0;
-        if (trHistory.size() + (isLive ? 0 : 1) >= atrPeriod) {
-            if (changeATR) {
-                if (lastAtr == 0) {
-                    // This is slightly wrong for live because we don't have the full history
-                    // properly masked
-                    // but for now let's simplify
-                    double sum = 0;
-                    for (Double t : trHistory)
-                        sum += t;
-                    if (!isLive)
-                        sum += tr;
-                    currentAtr = sum / atrPeriod;
-                } else {
-                    currentAtr = (lastAtr * (atrPeriod - 1) + tr) / atrPeriod;
-                }
-            } else {
-                double sum = 0;
-                int start = Math.max(0, trHistory.size() - atrPeriod + 1);
-                for (int i = start; i < trHistory.size(); i++)
-                    sum += trHistory.get(i);
-                sum += tr;
-                currentAtr = sum / atrPeriod;
+        if (trHistory.size() + (isNewCandle ? 1 : 0) >= atrPeriod) {
+            double sum = 0;
+            // if we are adding a new candle, we take atrPeriod-1 elements from history plus
+            // this one.
+            // if we are live, we take atrPeriod-1 elements from history plus this one.
+            int start = Math.max(0, trHistory.size() - atrPeriod + (isNewCandle ? 1 : 1));
+            for (int i = start; i < trHistory.size(); i++) {
+                sum += trHistory.get(i);
             }
+            sum += tr;
+            currentAtr = sum / atrPeriod;
         }
 
         // SuperTrend Logic
@@ -102,9 +109,9 @@ public class SuperTrendedMA {
                 dn = (lastClose < lastDn) ? Math.min(dn, lastDn) : dn;
 
                 if (currentTrend == -1 && close > dn) {
-                    currentTrend = 1;
+                    currentTrend = 1; // Buy Signal
                 } else if (currentTrend == 1 && close < up) {
-                    currentTrend = -1;
+                    currentTrend = -1; // Sell Signal
                 }
             } else {
                 up = currentEma - multiplier * currentAtr;
@@ -114,37 +121,28 @@ public class SuperTrendedMA {
             currentDn = dn;
         }
 
-        if (!isLive) {
-            // Commit to history
+        // Store live values for commit later
+        liveEma = currentEma;
+        liveUp = currentUp;
+        liveDn = currentDn;
+        liveTrend = currentTrend;
+        liveAtr = currentAtr;
+        liveClose = close;
+
+        if (isNewCandle) {
             srcHistory.add(close);
             trHistory.add(tr);
             maHistory.add(currentEma);
             upHistory.add(currentUp);
             dnHistory.add(currentDn);
             trendHistory.add(currentTrend);
-
-            // Update state
-            prevTrend = trend;
-            trend = currentTrend;
-            lastEma = currentEma;
-            lastUp = currentUp;
-            lastDn = currentDn;
-            lastAtr = currentAtr;
-            lastClose = close;
         } else {
-            // Just update OR add to history for visualization
-            if (maHistory.size() == stableHistorySize) {
-                // First tick of a new candle
-                maHistory.add(currentEma);
-                upHistory.add(currentUp);
-                dnHistory.add(currentDn);
-                trendHistory.add(currentTrend);
-            } else {
-                updateLastInHistory(maHistory, currentEma);
-                updateLastInHistory(upHistory, currentUp);
-                updateLastInHistory(dnHistory, currentDn);
-                updateLastInHistory(trendHistory, currentTrend);
-            }
+            updateLastInHistory(srcHistory, close);
+            updateLastInHistory(trHistory, tr);
+            updateLastInHistory(maHistory, currentEma);
+            updateLastInHistory(upHistory, currentUp);
+            updateLastInHistory(dnHistory, currentDn);
+            updateLastInHistory(trendHistory, currentTrend);
         }
     }
 
@@ -163,11 +161,6 @@ public class SuperTrendedMA {
             dnHistory.remove(0);
             trendHistory.remove(0);
         }
-    }
-
-    private double calculateATR() {
-        // Obsolete but kept for reference if needed
-        return lastAtr;
     }
 
     public double getMA() {

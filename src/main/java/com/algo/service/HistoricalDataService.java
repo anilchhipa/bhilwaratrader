@@ -1,224 +1,214 @@
 package com.algo.service;
 
 import com.algo.core.Candle;
-import com.algo.data.AngelClient;
+import com.algo.data.ZerodhaClient;
 import com.algo.data.TimescaleRepository;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
+import java.util.*;
 
 /**
- * Service for loading and syncing historical data to TimescaleDB
- * Inspired by HistoricalDataLoader but designed for TimescaleDB
+ * Service for loading and syncing historical data to TimescaleDB.
+ * Optimized for targeted timeframe syncing and thread-safety.
  */
 public class HistoricalDataService {
-    private final AngelClient angelClient;
+    private final ZerodhaClient zerodhaClient;
     private final TimescaleRepository repository;
+    private final com.algo.core.IndicatorConfig indicatorConfig;
+
+    // Track ongoing syncs to prevent redundant parallel API calls for the same
+    // symbol/timeframe
+    private final Set<String> syncingSyncs = Collections.synchronizedSet(new HashSet<>());
 
     private static final Map<String, Integer> INTERVAL_MINUTES = new HashMap<>();
     static {
-        INTERVAL_MINUTES.put("ONE_MINUTE", 1);
-        INTERVAL_MINUTES.put("THREE_MINUTE", 3);
-        INTERVAL_MINUTES.put("FIVE_MINUTE", 5);
-        INTERVAL_MINUTES.put("TEN_MINUTE", 10);
-        INTERVAL_MINUTES.put("FIFTEEN_MINUTE", 15);
-        INTERVAL_MINUTES.put("THIRTY_MINUTE", 30);
-        INTERVAL_MINUTES.put("ONE_HOUR", 60);
-        INTERVAL_MINUTES.put("TWO_HOUR", 120);
-        INTERVAL_MINUTES.put("ONE_DAY", 1440);
+        INTERVAL_MINUTES.put("1min", 1);
+        INTERVAL_MINUTES.put("3min", 3);
+        INTERVAL_MINUTES.put("5min", 5);
+        INTERVAL_MINUTES.put("15min", 15);
     }
 
-    // Supported timeframes
-    private static final String[] TIMEFRAMES = { "1min", "3min", "5min", "10min", "15min", "1hour", "1day" };
+    private static final String[] TIMEFRAMES = { "1min", "3min", "5min", "15min" };
 
-    public HistoricalDataService(AngelClient angelClient, TimescaleRepository repository) {
-        this.angelClient = angelClient;
+    public HistoricalDataService(ZerodhaClient zerodhaClient, TimescaleRepository repository,
+            com.algo.core.IndicatorConfig indicatorConfig) {
+        this.zerodhaClient = zerodhaClient;
         this.repository = repository;
+        this.indicatorConfig = indicatorConfig;
     }
 
     /**
-     * Load historical data for all supported timeframes for a given symbol
+     * Load historical data for a symbol. If targetTimeframe is null, syncs all.
      */
     public void loadInitialData(String symbol, String token) {
-        int requiredCount = 500; // Minimum candles required
-
-        System.out.println("Loading historical data for " + symbol);
-
-        for (String timeframe : TIMEFRAMES) {
-            String angelInterval = mapToAngelInterval(timeframe);
-            if (angelInterval == null)
-                continue;
-
-            try {
-                LocalDateTime lastTime = repository.getLastCandleTime(symbol, timeframe);
-
-                // Check if we need to sync
-                if (lastTime != null) {
-                    int existingCount = repository.getCandleCount(symbol, timeframe);
-                    if (existingCount >= requiredCount) {
-                        System.out
-                                .println("  [" + timeframe + "] Already has " + existingCount + " candles. Skipping.");
-                        continue;
-                    }
-                }
-
-                // Fetch from API
-                System.out.println("  [" + timeframe + "] Fetching from Angel One API...");
-                // Determine Exchange based on symbol characteristics
-                String exchange = "NSE"; // Default
-                if (symbol.startsWith("SENSEX") || symbol.startsWith("BANKEX")) {
-                    exchange = "BFO";
-                } else if (symbol.startsWith("NIFTY") || symbol.startsWith("BANKNIFTY") || symbol.startsWith("FINNIFTY")
-                        || symbol.endsWith("CE") || symbol.endsWith("PE") || symbol.endsWith("FUT")) {
-                    exchange = "NFO";
-                } else if (symbol.startsWith("MCX")) {
-                    exchange = "MCX";
-                } else if (symbol.startsWith("BSE:")) {
-                    exchange = "BSE";
-                }
-
-                List<Candle> candles = angelClient.fetchHistory(token, angelInterval, exchange);
-
-                if (candles != null && !candles.isEmpty()) {
-                    // Calculate indicators
-                    calculateAndPopulateIndicators(candles);
-
-                    // Save to database
-                    int saved = repository.saveCandles(candles, symbol, timeframe);
-                    System.out.println("  [" + timeframe + "] Saved " + saved + " candles to TimescaleDB");
-                } else {
-                    System.out.println("  [" + timeframe + "] No data returned from API");
-                }
-
-                // Rate limiting
-                Thread.sleep(1500);
-
-            } catch (Exception e) {
-                System.err.println("  [" + timeframe + "] Error: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-
-        System.out.println("Completed loading data for " + symbol);
+        loadInitialData(symbol, token, null);
     }
 
-    /**
-     * Sync new candles since the last stored timestamp
-     */
-    public void syncData(String symbol, String token, String timeframe) {
-        String angelInterval = mapToAngelInterval(timeframe);
-        if (angelInterval == null)
+    public void loadInitialData(String symbol, String token, String targetTimeframe) {
+        String lockKey = symbol + "_" + (targetTimeframe != null ? targetTimeframe : "ALL");
+        if (!syncingSyncs.add(lockKey))
             return;
 
         try {
+            // Require 2000 candles minimum to ensure cascaded EMAs are properly
+            // warmed up. The deepest EMA cascade (6 levels) needs ~3000+ candles.
+            int requiredCount = 2000;
+            System.out.println("Checking historical data for " + symbol
+                    + (targetTimeframe != null ? " [" + targetTimeframe + "]" : ""));
+
+            for (String tf : TIMEFRAMES) {
+                if (targetTimeframe != null && !targetTimeframe.equals(tf))
+                    continue;
+
+                if (shouldFetch(symbol, tf, requiredCount)) {
+                    // 1min : 60 days → ~4500 candles (cascaded EMAs need 3000+)
+                    // 3min : 30 days → ~1500 candles
+                    // 5min : 60 days → ~2250 candles
+                    // 15min: 60 days → ~750 candles
+                    int days = 60; // default for 1min and 15min
+                    if (tf.equals("3min"))
+                        days = 30;
+                    if (tf.equals("5min"))
+                        days = 60;
+                    fetchAndSave(symbol, token, tf, days);
+                }
+            }
+        } finally {
+            syncingSyncs.remove(lockKey);
+        }
+    }
+
+    private boolean shouldFetch(String symbol, String tf, int requiredCount) {
+        int existingCount = repository.getCandleCount(symbol, tf);
+        if (existingCount < requiredCount) {
+            return true;
+        }
+        System.out.println("  [" + tf + "] Already has " + existingCount + " candles. Skipping initial fetch.");
+        return false;
+    }
+
+    private void fetchAndSave(String symbol, String token, String timeframe, int days) {
+        String zerodhaInterval = mapToZerodhaInterval(timeframe);
+        if (zerodhaInterval == null)
+            return;
+
+        try {
+            System.out.println("  [" + timeframe + "] Fetching " + days + " days from Zerodha API...");
+            String exchange = resolveExchange(symbol);
+
+            List<Candle> candles = zerodhaClient.fetchHistory(token, zerodhaInterval, exchange, days);
+
+            if (candles != null && !candles.isEmpty()) {
+                calculateAndPopulateIndicators(candles, null, null);
+                int saved = repository.saveCandles(candles, symbol, timeframe);
+                System.out.println("  [" + timeframe + "] Saved " + saved + " candles to TimescaleDB");
+            }
+
+            // Rate limit buffer
+            Thread.sleep(500);
+        } catch (Exception e) {
+            System.err.println("  [" + timeframe + "] Error: " + e.getMessage());
+        }
+    }
+
+    private String resolveExchange(String symbol) {
+        if (symbol.startsWith("SENSEX") || symbol.startsWith("BANKEX"))
+            return "BFO";
+        if (symbol.startsWith("NIFTY") || symbol.startsWith("BANKNIFTY") || symbol.startsWith("FINNIFTY")
+                || symbol.endsWith("CE") || symbol.endsWith("PE") || symbol.endsWith("FUT"))
+            return "NFO";
+        if (symbol.startsWith("MCX"))
+            return "MCX";
+        if (symbol.startsWith("BSE:"))
+            return "BSE";
+        return "NSE";
+    }
+
+    public void syncData(String symbol, String token, String timeframe) {
+        String lockKey = symbol + "_" + timeframe + "_SYNC";
+        if (!syncingSyncs.add(lockKey))
+            return;
+
+        try {
+            String zerodhaInterval = mapToZerodhaInterval(timeframe);
+            if (zerodhaInterval == null)
+                return;
+
             LocalDateTime lastTime = repository.getLastCandleTime(symbol, timeframe);
             if (lastTime == null) {
-                System.out.println(
-                        "No existing data for " + symbol + " (" + timeframe + "). Use loadInitialData() first.");
+                loadInitialData(symbol, token, timeframe);
                 return;
             }
 
             LocalDateTime targetTime = LocalDateTime.now();
-
-            // If already up to date, skip
-            if (!lastTime.isBefore(targetTime.minusMinutes(INTERVAL_MINUTES.getOrDefault(angelInterval, 1)))) {
-                System.out.println("Data for " + symbol + " (" + timeframe + ") is already up to date.");
-                return;
+            if (!lastTime.isBefore(targetTime.minusMinutes(1))) {
+                return; // Already fresh
             }
 
-            // Fetch new data
-            // Determine Exchange based on symbol characteristics
-            String exchange = "NSE"; // Default
-            if (symbol.startsWith("SENSEX") || symbol.startsWith("BANKEX")) {
-                exchange = "BFO";
-            } else if (symbol.startsWith("NIFTY") || symbol.startsWith("BANKNIFTY") || symbol.startsWith("FINNIFTY")
-                    || symbol.endsWith("CE") || symbol.endsWith("PE") || symbol.endsWith("FUT")) {
-                exchange = "NFO";
-            } else if (symbol.startsWith("MCX")) {
-                exchange = "MCX";
-            } else if (symbol.startsWith("BSE:")) {
-                exchange = "BSE";
-            }
-
-            List<Candle> newCandles = angelClient.fetchHistory(token, angelInterval, lastTime, targetTime, exchange);
+            String exchange = resolveExchange(symbol);
+            List<Candle> newCandles = zerodhaClient.fetchHistory(token, zerodhaInterval, lastTime, targetTime,
+                    exchange);
 
             if (newCandles != null && !newCandles.isEmpty()) {
-                calculateAndPopulateIndicators(newCandles);
+                calculateAndPopulateIndicators(newCandles, symbol, timeframe);
                 int saved = repository.saveCandles(newCandles, symbol, timeframe);
                 System.out.println("Synced " + saved + " new candles for " + symbol + " (" + timeframe + ")");
             }
-
         } catch (Exception e) {
-            System.err.println("Error syncing data for " + symbol + " (" + timeframe + "): " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Error syncing " + symbol + " (" + timeframe + "): " + e.getMessage());
+        } finally {
+            syncingSyncs.remove(lockKey);
         }
     }
 
-    /**
-     * Calculate indicators for a list of candles and populate them
-     */
-    private void calculateAndPopulateIndicators(List<Candle> candles) {
-        if (candles == null || candles.isEmpty()) {
+    private void calculateAndPopulateIndicators(List<Candle> candles, String symbol, String timeframe) {
+        if (candles == null || candles.isEmpty())
             return;
+
+        com.algo.core.Strategy strategy = new com.algo.core.Strategy(indicatorConfig);
+
+        // Warm up if we have prior context
+        if (symbol != null && timeframe != null) {
+            List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 3000);
+            if (priorHistory != null) {
+                for (Candle c : priorHistory)
+                    strategy.onNewCandle(c);
+            }
         }
 
-        // Create a Strategy instance to calculate indicators
-        com.algo.core.Strategy strategy = new com.algo.core.Strategy(15, 7, 3.0);
-
-        // Process each candle through the strategy
         for (Candle candle : candles) {
             strategy.onNewCandle(candle);
-            // Indicators are automatically populated in the candle by Strategy.onNewCandle
         }
     }
 
-    /**
-     * Push initial historical indicators for all symbols to Redis via Engine
-     */
     public void syncAllSymbolsToRedis(com.algo.core.Engine engine) {
-        System.out.println("Syncing all historical data to Redis for live display...");
         for (String symbol : engine.getSymbolStates().keySet()) {
             com.algo.core.SymbolState state = engine.getState(symbol);
             if (state == null)
                 continue;
 
             for (String tf : TIMEFRAMES) {
-                List<Candle> history = repository.getLatestCandles(symbol, tf, 1);
+                List<Candle> history = repository.getLatestCandles(symbol, tf, 3000);
                 if (history != null && !history.isEmpty()) {
-                    Candle last = history.get(0);
-                    // Update current state in memory
-                    state.update(last.getClose(), last.getTimestamp());
+                    state.seedHistory(tf, history);
+                    // Recalculate indicators during seed to ensure consistency
+                    calculateAndPopulateIndicators(history, null, null);
+                    repository.saveCandles(history, symbol, tf);
                 }
             }
         }
-        System.out.println("Historical data sync to Redis complete.");
     }
 
-    /**
-     * Maps user timeframe string to Angel One API interval string
-     */
-    private String mapToAngelInterval(String timeframe) {
+    private String mapToZerodhaInterval(String timeframe) {
         switch (timeframe.toLowerCase()) {
             case "1min":
-                return "ONE_MINUTE";
+                return "minute";
             case "3min":
-                return "THREE_MINUTE";
+                return "3minute";
             case "5min":
-                return "FIVE_MINUTE";
-            case "10min":
-                return "TEN_MINUTE";
+                return "5minute";
             case "15min":
-                return "FIFTEEN_MINUTE";
-            case "30min":
-                return "THIRTY_MINUTE";
-            case "1hour":
-                return "ONE_HOUR";
-            case "2hour":
-                return "TWO_HOUR";
-            case "1day":
-                return "ONE_DAY";
+                return "15minute";
             default:
                 return null;
         }

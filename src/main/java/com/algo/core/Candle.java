@@ -15,7 +15,8 @@ public class Candle {
     private Double ema15_5;
     private Double ema15_15;
     private Double ema15_15_15;
-    private Double ema15_30;
+    private Double ema15_15_15_15;
+    private Double ema15_15_15_15_30; // 5th cascaded EMA (cascade5 period)
     private Double stMa;
     private Double stUp;
     private Double stDn;
@@ -130,12 +131,20 @@ public class Candle {
         this.ema15_15_15 = round(ema15_15_15);
     }
 
-    public Double getEma15_30() {
-        return ema15_30;
+    public Double getEma15_15_15_15() {
+        return ema15_15_15_15;
     }
 
-    public void setEma15_30(Double ema15_30) {
-        this.ema15_30 = round(ema15_30);
+    public void setEma15_15_15_15(Double ema15_15_15_15) {
+        this.ema15_15_15_15 = round(ema15_15_15_15);
+    }
+
+    public Double getEma15_15_15_15_30() {
+        return ema15_15_15_15_30;
+    }
+
+    public void setEma15_15_15_15_30(Double ema15_15_15_15_30) {
+        this.ema15_15_15_15_30 = round(ema15_15_15_15_30);
     }
 
     public Double getStMa() {
