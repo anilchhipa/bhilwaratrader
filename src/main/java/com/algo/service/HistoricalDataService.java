@@ -1,6 +1,7 @@
 package com.algo.service;
 
 import com.algo.core.Candle;
+import com.algo.core.MarketUtils;
 import com.algo.data.ZerodhaClient;
 import com.algo.data.TimescaleRepository;
 
@@ -96,12 +97,20 @@ public class HistoricalDataService {
             System.out.println("  [" + timeframe + "] Fetching " + days + " days from Zerodha API...");
             String exchange = resolveExchange(symbol);
 
-            List<Candle> candles = zerodhaClient.fetchHistory(token, zerodhaInterval, exchange, days);
+            LocalDateTime targetTime = MarketUtils.getTargetSyncTime();
+            LocalDateTime startTime = targetTime.minusDays(days);
+            List<Candle> candles = zerodhaClient.fetchHistory(token, zerodhaInterval, startTime, targetTime, exchange);
 
             if (candles != null && !candles.isEmpty()) {
-                calculateAndPopulateIndicators(candles, null, null);
-                int saved = repository.saveCandles(candles, symbol, timeframe);
-                System.out.println("  [" + timeframe + "] Saved " + saved + " candles to TimescaleDB");
+                // Filter out any candles that fall outside standard market hours (e.g.
+                // pre-market ghost data)
+                candles.removeIf(c -> !MarketUtils.isValidCandleTime(c.getTimestamp()));
+
+                if (!candles.isEmpty()) {
+                    calculateAndPopulateIndicators(candles, symbol, timeframe);
+                    int saved = repository.saveCandles(candles, symbol, timeframe);
+                    System.out.println("  [" + timeframe + "] Saved " + saved + " candles to TimescaleDB");
+                }
             }
 
             // Rate limit buffer
@@ -140,8 +149,16 @@ public class HistoricalDataService {
                 return;
             }
 
-            LocalDateTime targetTime = LocalDateTime.now();
-            if (!lastTime.isBefore(targetTime.minusMinutes(1))) {
+            LocalDateTime targetTime = MarketUtils.getTargetSyncTime();
+            // Use interval-aware tolerance: 5min data that's 4 min old is still fresh
+            int toleranceMins = 1;
+            if (timeframe != null && timeframe.endsWith("min")) {
+                try {
+                    toleranceMins = Integer.parseInt(timeframe.replace("min", ""));
+                } catch (Exception ignored) {
+                }
+            }
+            if (!lastTime.isBefore(targetTime.minusMinutes(toleranceMins))) {
                 return; // Already fresh
             }
 
@@ -150,9 +167,14 @@ public class HistoricalDataService {
                     exchange);
 
             if (newCandles != null && !newCandles.isEmpty()) {
-                calculateAndPopulateIndicators(newCandles, symbol, timeframe);
-                int saved = repository.saveCandles(newCandles, symbol, timeframe);
-                System.out.println("Synced " + saved + " new candles for " + symbol + " (" + timeframe + ")");
+                // Filter out pre-market data if any
+                newCandles.removeIf(c -> !MarketUtils.isValidCandleTime(c.getTimestamp()));
+
+                if (!newCandles.isEmpty()) {
+                    calculateAndPopulateIndicators(newCandles, symbol, timeframe);
+                    int saved = repository.saveCandles(newCandles, symbol, timeframe);
+                    System.out.println("Synced " + saved + " new candles for " + symbol + " (" + timeframe + ")");
+                }
             }
         } catch (Exception e) {
             System.err.println("Error syncing " + symbol + " (" + timeframe + "): " + e.getMessage());
@@ -169,15 +191,39 @@ public class HistoricalDataService {
 
         // Warm up if we have prior context
         if (symbol != null && timeframe != null) {
-            List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 3000);
+            List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 300);
             if (priorHistory != null) {
                 for (Candle c : priorHistory)
-                    strategy.onNewCandle(c);
+                    strategy.onNewCandle(c, 0); // Warm up uses neutral bias
+            }
+        }
+
+        // Logic: If we are not calculating the 15m chart itself, try to find the 15m
+        // bias context
+        Map<LocalDateTime, Integer> macroBiasMap = new HashMap<>();
+        if (symbol != null && !"15min".equals(timeframe)) {
+            List<Candle> macroCandles = repository.getLatestCandles(symbol, "15min", 1000);
+            if (macroCandles != null) {
+                com.algo.core.Strategy macroPrep = new com.algo.core.Strategy(indicatorConfig);
+                for (Candle mc : macroCandles) {
+                    macroPrep.onNewCandle(mc, 0);
+                    macroBiasMap.put(mc.getTimestamp(), macroPrep.getBias());
+                }
             }
         }
 
         for (Candle candle : candles) {
-            strategy.onNewCandle(candle);
+            int bias = 0;
+            if ("15min".equals(timeframe)) {
+                bias = 999;
+            } else if (!macroBiasMap.isEmpty()) {
+                // Find the 15m candle that contained this candle's timestamp
+                LocalDateTime candleTime = candle.getTimestamp();
+                LocalDateTime macroTime = candleTime.withMinute((candleTime.getMinute() / 15) * 15).withSecond(0)
+                        .withNano(0);
+                bias = macroBiasMap.getOrDefault(macroTime, 0);
+            }
+            strategy.onNewCandle(candle, bias);
         }
     }
 
@@ -188,12 +234,21 @@ public class HistoricalDataService {
                 continue;
 
             for (String tf : TIMEFRAMES) {
-                List<Candle> history = repository.getLatestCandles(symbol, tf, 3000);
-                if (history != null && !history.isEmpty()) {
-                    state.seedHistory(tf, history);
-                    // Recalculate indicators during seed to ensure consistency
-                    calculateAndPopulateIndicators(history, null, null);
-                    repository.saveCandles(history, symbol, tf);
+                // Use a consistent lock key that matches syncData's guard to prevent
+                // concurrent syncs for the same symbol/timeframe from racing.
+                String lockKey = symbol + "_" + tf + "_SYNC";
+                if (!syncingSyncs.add(lockKey))
+                    continue;
+
+                try {
+                    List<Candle> history = repository.getLatestCandles(symbol, tf, 3000);
+                    if (history != null && !history.isEmpty()) {
+                        // Only seed the Strategy in-memory state (warm up EMAs).
+                        // Do NOT re-calculate indicators or re-save to DB — those are already stored.
+                        state.seedHistory(tf, history);
+                    }
+                } finally {
+                    syncingSyncs.remove(lockKey);
                 }
             }
         }

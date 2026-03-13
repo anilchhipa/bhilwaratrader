@@ -77,7 +77,7 @@ public class TradingController {
 
         try {
             // Try to fetch from TimescaleDB first
-            List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, 5000);
+            List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
 
             // Freshness Check: If DB has data but the latest candle is old, trigger sync
             if (history != null && !history.isEmpty()) {
@@ -91,13 +91,22 @@ public class TradingController {
                 // minute of the interval.
                 // Increase sync sensitivity: If data is more than 1 minute old, sync it.
                 // This ensures charts feel 'instant' when switching between symbols.
-                if (latest.getTimestamp().isBefore(targetTime.minusMinutes(1))) {
+                // Calculate tolerance based on interval
+                int toleranceMins = 1;
+                if (interval.endsWith("min")) {
+                    try {
+                        toleranceMins = Integer.parseInt(interval.replace("min", ""));
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                if (latest.getTimestamp().isBefore(targetTime.minusMinutes(toleranceMins))) {
                     System.out.println("Data for " + symbol + " (" + interval + ") is stale (last: "
                             + latest.getTimestamp() + "). Syncing...");
                     historicalDataService.syncData(symbol, token, interval);
 
                     // Re-fetch after sync to get updated data
-                    history = timescaleRepository.getLatestCandles(symbol, dbInterval, 5000);
+                    history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
                 }
 
                 // Append the current active/incomplete candle from memory so the UI has the
@@ -114,7 +123,7 @@ public class TradingController {
             historicalDataService.loadInitialData(symbol, token, interval);
 
             // Retry fetching from database
-            history = timescaleRepository.getLatestCandles(symbol, dbInterval, 5000);
+            history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
             if (history != null && !history.isEmpty()) {
                 appendActiveCandle(symbol, dbInterval, history);
 
@@ -153,12 +162,6 @@ public class TradingController {
                     copy.setEma15_15_15(active.getEma15_15_15());
                     copy.setEma15_15_15_15(active.getEma15_15_15_15());
                     copy.setEma15_15_15_15_30(active.getEma15_15_15_15_30());
-                    copy.setEma50(active.getEma50());
-                    copy.setEma100(active.getEma100());
-                    copy.setMacdLine(active.getMacdLine());
-                    copy.setSignalLine(active.getSignalLine());
-                    copy.setMacd5(active.getMacd5());
-                    copy.setMacd55(active.getMacd55());
                     copy.setStMa(active.getStMa());
                     copy.setStUp(active.getStUp());
                     copy.setStDn(active.getStDn());
@@ -318,9 +321,27 @@ public class TradingController {
         zerodhaClient.resolveTokens(tokenManager);
         engine.registerSymbol(symbol);
 
-        // Subscribe to live feed
         String token = tokenManager.getToken(symbol);
         if (token != null) {
+            // 1. Fetch all required historical data (up to current time)
+            historicalDataService.loadInitialData(symbol, token);
+
+            // 2. Fetch any missing recent candles
+            for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                historicalDataService.syncData(symbol, token, tf);
+            }
+
+            // 3. Seed the downloaded history into the live memory Engine
+            // This warms up the EMAs and other cascaded indicators so they don't
+            // cold-start.
+            for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                java.util.List<Candle> history = timescaleRepository.getLatestCandles(symbol, tf, 3000);
+                if (history != null && !history.isEmpty()) {
+                    engine.getState(symbol).seedHistory(tf, history);
+                }
+            }
+
+            // 4. Finally, subscribe to the live feed now that history is populated
             liveFeed.subscribe(java.util.Collections.singleton(token));
         }
 

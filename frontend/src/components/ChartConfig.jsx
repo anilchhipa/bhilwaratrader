@@ -6,6 +6,7 @@ const ChartConfig = ({ visibility, setVisibility, onClose }) => {
             title: "Analysis Helpers",
             items: [
                 { key: 'CLOUD', label: 'Supertrend Cloud' },
+                { key: 'SIGNALS', label: 'Buy/Sell Signals' },
                 { key: '1012_OPEN_CLOSE', label: '10:12 AM Ref Lines' }
             ]
         },
@@ -27,15 +28,7 @@ const ChartConfig = ({ visibility, setVisibility, onClose }) => {
                 { key: 'EMA100', label: 'EMA 100 (Purple)' },
             ]
         },
-        {
-            title: "MACD Indicators",
-            items: [
-                { key: 'MACD', label: 'MACD Line' },
-                { key: 'SIGNAL', label: 'Signal Line' },
-                { key: 'MACD5', label: 'MACD 5' },
-                { key: 'MACD55', label: 'MACD 55' },
-            ]
-        }
+
     ];
 
     const handleToggle = (key) => {

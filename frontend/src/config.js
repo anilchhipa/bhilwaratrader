@@ -1,2 +1,2 @@
-export const API_BASE = 'http://localhost:8085'; // User currently running on 8085
-export const WS_BASE = 'http://localhost:8085/ws-trading';
+export const API_BASE = window.location.origin.includes('localhost') ? 'http://localhost:8085' : '';
+export const WS_BASE = (window.location.origin.includes('localhost') ? 'http://localhost:8085' : window.location.origin) + '/ws-trading';

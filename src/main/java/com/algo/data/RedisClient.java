@@ -15,7 +15,8 @@ public class RedisClient {
         JedisPool pool = null;
         try {
             JedisPoolConfig poolConfig = new JedisPoolConfig();
-            poolConfig.setMaxTotal(5);
+            poolConfig.setMaxTotal(50); // Increased from 5
+            poolConfig.setMaxIdle(20);
             pool = new JedisPool(poolConfig, host, port);
         } catch (Exception e) {
             System.err.println("Redis Initialization Failed: " + e.getMessage());
@@ -33,14 +34,20 @@ public class RedisClient {
             String ohlcKey = symbol + ":" + interval + ":OHLC";
             String indKey = symbol + ":" + interval + ":INDICATORS";
 
-            // Use HSET for efficient storage
+            // Use HMSET for efficient batched O(1) storage
+            java.util.Map<String, String> ohlcMap = new java.util.HashMap<>();
             for (String key : ohlc.keySet()) {
-                jedis.hset(ohlcKey, key, ohlc.get(key).toString());
+                ohlcMap.put(key, String.valueOf(ohlc.get(key)));
             }
+            if (!ohlcMap.isEmpty())
+                jedis.hmset(ohlcKey, ohlcMap);
 
+            java.util.Map<String, String> indMap = new java.util.HashMap<>();
             for (String key : indicators.keySet()) {
-                jedis.hset(indKey, key, indicators.get(key).toString());
+                indMap.put(key, String.valueOf(indicators.get(key)));
             }
+            if (!indMap.isEmpty())
+                jedis.hmset(indKey, indMap);
         } catch (Exception e) {
             System.err.println("Redis Error: " + e.getMessage());
         }

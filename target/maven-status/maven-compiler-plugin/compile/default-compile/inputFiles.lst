@@ -1,6 +1,5 @@
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/TimescaleClient.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/service/HistoricalDataService.java
-/home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/AngelClient.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/LiveFeed.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/core/MarketUtils.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/CandleListener.java
@@ -8,7 +7,9 @@
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/web/WebSocketConfig.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/indicators/DeltaIndicatorEngine.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/TimescaleRepository.java
+/home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/ZerodhaClient.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/web/LiveUpdateBroadcaster.java
+/home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/core/IndicatorConfig.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/indicators/MovingAverages.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/data/TokenManager.java
 /home/anil-chhipa/Desktop/Algo/src/main/java/com/algo/core/MarketSessionManager.java

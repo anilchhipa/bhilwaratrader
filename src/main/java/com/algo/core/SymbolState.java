@@ -24,6 +24,9 @@ public class SymbolState {
     // Timeframe -> Strategy (Original Desktop Logic)
     private final Map<String, Strategy> strategies = new ConcurrentHashMap<>();
 
+    // Timeframe -> Last Trend Flip Time
+    private final Map<String, java.time.LocalDateTime> lastFlipTimes = new ConcurrentHashMap<>();
+
     @FunctionalInterface
     public interface CandleCompleteListener {
         void onComplete(String symbol, String timeframe, Candle candle);
@@ -41,7 +44,7 @@ public class SymbolState {
         }
     }
 
-    public void update(double price, java.time.LocalDateTime time) {
+    public synchronized void update(double price, java.time.LocalDateTime time) {
         for (String tf : timeframes) {
             updateTimeframe(tf, price, time);
         }
@@ -57,15 +60,61 @@ public class SymbolState {
             return;
         }
 
-        for (Candle c : historicalCandles) {
-            // Feed into strategy to warm up the state (EMAs, MACD, etc).
-            strategy.onNewCandle(c);
+        // Find the most recent candle that has indicator data
+        Candle bestPrimal = null;
+        for (int i = historicalCandles.size() - 1; i >= 0; i--) {
+            Candle c = historicalCandles.get(i);
+            if (c.getEma15() != null && c.getEma15() > 0) {
+                bestPrimal = c;
+                break;
+            }
+        }
 
-            // Set as the current active candle baseline
-            currentCandles.put(tf, c);
+        if (bestPrimal != null) {
+            // INSTANT SYNC: Adopt the state from the DB directly.
+            // This ensures a perfectly smooth line with zero "cold start" delay.
+            strategy.adoptState(bestPrimal);
+            System.out.println("SymbolState [" + symbol + " " + tf + "]: Primed strategy from DB baseline at "
+                    + bestPrimal.getTimestamp());
 
-            // SEED STABLE PRICE for Outlier Filter immediately from history
-            lastStablePrices.put(tf, c.getClose());
+            // If the best primal is not the last candle, we still need to process the
+            // remaining ones
+            int startIndex = historicalCandles.indexOf(bestPrimal) + 1;
+            for (int i = startIndex; i < historicalCandles.size(); i++) {
+                strategy.onNewCandle(historicalCandles.get(i), 0); // 0 = Neutral/No Filter during initial history seed
+            }
+        } else {
+            // Fallback: Slow warm-up by re-calculating everything
+            System.out.println("SymbolState [" + symbol + " " + tf
+                    + "]: No indicator baseline in DB. Re-calculating from " + historicalCandles.size() + " candles.");
+            for (Candle c : historicalCandles) {
+                strategy.onNewCandle(c, 0);
+            }
+        }
+
+        // Set the very last candle as the current baseline for upcoming live ticks
+        Candle last = historicalCandles.get(historicalCandles.size() - 1);
+        currentCandles.put(tf, last);
+        lastStablePrices.put(tf, last.getClose());
+
+        // CRITICAL: Populate the indicator map immediately so the Dashboard is ready!
+        updateIndicatorMap(tf, last);
+
+        // Find when the trend last flipped for this timeframe
+        Integer currentTrend = last.getStTrend();
+        if (currentTrend != null) {
+            for (int i = historicalCandles.size() - 2; i >= 0; i--) {
+                Candle prev = historicalCandles.get(i);
+                if (prev.getStTrend() != null && !prev.getStTrend().equals(currentTrend)) {
+                    // Trend changed at historicalCandles.get(i + 1)
+                    lastFlipTimes.put(tf, historicalCandles.get(i + 1).getTimestamp());
+                    break;
+                }
+            }
+            if (!lastFlipTimes.containsKey(tf)) {
+                // If no flip found in buffered history, use the oldest candle's time as start
+                lastFlipTimes.put(tf, historicalCandles.get(0).getTimestamp());
+            }
         }
     }
 
@@ -90,8 +139,14 @@ public class SymbolState {
             current = new Candle(price, price, price, price, 0, start);
             currentCandles.put(tf, current);
 
-            // Update Strategy (New Candle Mode)
-            strategies.get(tf).onNewCandle(current);
+            // Get the bias from the 15min "Compass" chart
+            Strategy macroStrategy = strategies.get("15min");
+            // If we are updating the 15m chart itself, we pass a special value (999) to
+            // bypass the filter
+            int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
+
+            // Update Strategy (New Candle Mode) with MTF filtering
+            strategies.get(tf).onNewCandle(current, macroBias);
         } else {
             // Price Spike Filter: Ignore ticks that deviate more than 50% from the last
             // closed
@@ -114,7 +169,13 @@ public class SymbolState {
             current.setClose(price);
 
             // Update Strategy (Live Update Mode)
+            Integer prevTrend = current.getStTrend();
             strategies.get(tf).updateLastCandle(current);
+
+            // Check if trend flipped during this live update
+            if (prevTrend != null && current.getStTrend() != null && !current.getStTrend().equals(prevTrend)) {
+                lastFlipTimes.put(tf, current.getTimestamp());
+            }
         }
 
         // Pull indicators from Strategy into the indicatorValues map for
@@ -150,14 +211,6 @@ public class SymbolState {
         safePut(values, "EMA15_15_15", strategy.getEma15_15_15());
         safePut(values, "EMA15_15_15_15", strategy.getEma15_15_15_15());
         safePut(values, "EMA15_15_15_15_30", strategy.getEma15_15_15_15_30());
-
-        safePut(values, "EMA50", current.getEma50());
-        safePut(values, "EMA100", current.getEma100());
-        safePut(values, "MACD", current.getMacdLine());
-        safePut(values, "SIGNAL", current.getSignalLine());
-        safePut(values, "MACD5", current.getMacd5());
-        safePut(values, "MACD55", current.getMacd55());
-        safePut(values, "EMA5", current.getEma15_15_15_15_30());
         safePut(values, "ST_MA", current.getStMa());
         safePut(values, "ST_UP", current.getStUp());
         safePut(values, "ST_DN", current.getStDn());
@@ -206,5 +259,9 @@ public class SymbolState {
 
     public Map<String, Map<String, Double>> getIndicatorValues() {
         return indicatorValues;
+    }
+
+    public Map<String, java.time.LocalDateTime> getLastFlipTimes() {
+        return lastFlipTimes;
     }
 }

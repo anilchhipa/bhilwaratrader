@@ -18,7 +18,7 @@ export const formatSymbol = (symbol) => {
         const strike = optMatch[5];
         const type = optMatch[6];
 
-        return `${name} ${day}-${month} ${strike} ${type}`;
+        return `${name} ${strike} ${type}`;
     }
 
     // Fallback for simple Futures or other formats

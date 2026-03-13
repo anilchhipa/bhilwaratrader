@@ -2,15 +2,15 @@
 
 :root {
   --bg-deep: #08090d;
-  --bg-surface: rgba(20, 24, 33, 0.7);
-  --bg-card: rgba(30, 34, 45, 0.4);
+  --bg-surface: rgba(20, 24, 33, 0.9);
+  --bg-card: rgba(30, 34, 45, 0.6);
   --accent-neon-blue: #3b82f6;
   --accent-emerald: #10b981;
   --accent-crimson: #ef4444;
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+  --glass-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.6);
 
   font-family: 'Inter', system-ui, sans-serif;
   line-height: 1.5;

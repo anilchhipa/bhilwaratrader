@@ -75,4 +75,13 @@ public class MarketUtils {
     public static boolean isPostMarket() {
         return LocalTime.now().isAfter(MARKET_CLOSE);
     }
+
+    /**
+     * Checks if a candle timestamp falls within valid standard market hours (09:15
+     * to 15:30)
+     */
+    public static boolean isValidCandleTime(LocalDateTime time) {
+        LocalTime lt = time.toLocalTime();
+        return !lt.isBefore(MARKET_OPEN) && !lt.isAfter(MARKET_CLOSE);
+    }
 }

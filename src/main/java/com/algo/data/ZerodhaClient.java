@@ -55,7 +55,6 @@ public class ZerodhaClient {
         }
 
         java.util.Map<String, String> env = new java.util.HashMap<>(System.getenv());
-        env.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
 
         try (Playwright playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env))) {
             BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()

@@ -23,7 +23,7 @@ public class TimescaleClient {
             config.setJdbcUrl(url);
             config.setUsername(user);
             config.setPassword(password);
-            config.setMaximumPoolSize(5);
+            config.setMaximumPoolSize(20);
             config.setInitializationFailTimeout(0); // Don't crash on start
             ds = new HikariDataSource(config);
         } catch (Exception e) {

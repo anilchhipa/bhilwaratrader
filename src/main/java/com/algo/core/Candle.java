@@ -22,14 +22,6 @@ public class Candle {
     private Double stDn;
     private Integer stTrend;
 
-    // MACD and additional EMA values
-    private Double ema50;
-    private Double ema100;
-    private Double macdLine;
-    private Double signalLine;
-    private Double macd5;
-    private Double macd55;
-
     public Candle(double open, double high, double low, double close, long volume, LocalDateTime timestamp) {
         this.open = open;
         this.high = high;
@@ -91,20 +83,13 @@ public class Candle {
         this.timestamp = timestamp;
     }
 
-    // Rounding utility
-    private Double round(Double value) {
-        if (value == null)
-            return null;
-        return Math.round(value * 100.0) / 100.0;
-    }
-
-    // Indicator Getters and Setters with Rounding
+    // Indicator Getters and Setters (Precision preserved to avoid zig-zagging)
     public Double getEma15() {
         return ema15;
     }
 
     public void setEma15(Double ema15) {
-        this.ema15 = round(ema15);
+        this.ema15 = ema15;
     }
 
     public Double getEma15_5() {
@@ -112,7 +97,7 @@ public class Candle {
     }
 
     public void setEma15_5(Double ema15_5) {
-        this.ema15_5 = round(ema15_5);
+        this.ema15_5 = ema15_5;
     }
 
     public Double getEma15_15() {
@@ -120,7 +105,7 @@ public class Candle {
     }
 
     public void setEma15_15(Double ema15_15) {
-        this.ema15_15 = round(ema15_15);
+        this.ema15_15 = ema15_15;
     }
 
     public Double getEma15_15_15() {
@@ -128,7 +113,7 @@ public class Candle {
     }
 
     public void setEma15_15_15(Double ema15_15_15) {
-        this.ema15_15_15 = round(ema15_15_15);
+        this.ema15_15_15 = ema15_15_15;
     }
 
     public Double getEma15_15_15_15() {
@@ -136,7 +121,7 @@ public class Candle {
     }
 
     public void setEma15_15_15_15(Double ema15_15_15_15) {
-        this.ema15_15_15_15 = round(ema15_15_15_15);
+        this.ema15_15_15_15 = ema15_15_15_15;
     }
 
     public Double getEma15_15_15_15_30() {
@@ -144,7 +129,7 @@ public class Candle {
     }
 
     public void setEma15_15_15_15_30(Double ema15_15_15_15_30) {
-        this.ema15_15_15_15_30 = round(ema15_15_15_15_30);
+        this.ema15_15_15_15_30 = ema15_15_15_15_30;
     }
 
     public Double getStMa() {
@@ -152,7 +137,7 @@ public class Candle {
     }
 
     public void setStMa(Double stMa) {
-        this.stMa = round(stMa);
+        this.stMa = stMa;
     }
 
     public Double getStUp() {
@@ -160,7 +145,7 @@ public class Candle {
     }
 
     public void setStUp(Double stUp) {
-        this.stUp = round(stUp);
+        this.stUp = stUp;
     }
 
     public Double getStDn() {
@@ -168,7 +153,7 @@ public class Candle {
     }
 
     public void setStDn(Double stDn) {
-        this.stDn = round(stDn);
+        this.stDn = stDn;
     }
 
     public Integer getStTrend() {
@@ -179,51 +164,4 @@ public class Candle {
         this.stTrend = stTrend;
     }
 
-    public Double getEma50() {
-        return ema50;
-    }
-
-    public void setEma50(Double ema50) {
-        this.ema50 = round(ema50);
-    }
-
-    public Double getEma100() {
-        return ema100;
-    }
-
-    public void setEma100(Double ema100) {
-        this.ema100 = round(ema100);
-    }
-
-    public Double getMacdLine() {
-        return macdLine;
-    }
-
-    public void setMacdLine(Double macdLine) {
-        this.macdLine = round(macdLine);
-    }
-
-    public Double getSignalLine() {
-        return signalLine;
-    }
-
-    public void setSignalLine(Double signalLine) {
-        this.signalLine = round(signalLine);
-    }
-
-    public Double getMacd5() {
-        return macd5;
-    }
-
-    public void setMacd5(Double macd5) {
-        this.macd5 = round(macd5);
-    }
-
-    public Double getMacd55() {
-        return macd55;
-    }
-
-    public void setMacd55(Double macd55) {
-        this.macd55 = round(macd55);
-    }
 }

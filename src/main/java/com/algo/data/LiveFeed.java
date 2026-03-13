@@ -18,10 +18,13 @@ public class LiveFeed {
     private BiConsumer<String, Double> onTick;
     private TokenManager tokenManager;
     private com.algo.core.Engine engine;
-    private KiteTicker ticker;
+    private KiteTicker[] tickers = new KiteTicker[3];
     private String clientCode;
     private String apiKey;
     private String accessToken;
+
+    private final java.util.Set<String> subscribedTokens = java.util.Collections
+            .newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
     public LiveFeed(String clientCode, String apiKey,
             TokenManager tokenManager, com.algo.core.Engine engine, BiConsumer<String, Double> onTick) {
@@ -37,47 +40,53 @@ public class LiveFeed {
     public void setFeedToken(String accessToken) {
         this.accessToken = accessToken;
         if (apiKey != null && accessToken != null && !accessToken.trim().isEmpty()) {
-            System.out.println("LiveFeed: (Re)Initializing KiteTicker for " + clientCode);
-            this.ticker = new KiteTicker(accessToken, apiKey);
-            setupTickerListeners();
+            System.out.println("LiveFeed: (Re)Initializing KiteTickers for " + clientCode);
+            for (int i = 0; i < 3; i++) {
+                if (tickers[i] != null) {
+                    try {
+                        tickers[i].disconnect();
+                    } catch (Exception e) {
+                    }
+                }
+                tickers[i] = new KiteTicker(accessToken, apiKey);
+                setupTickerListeners(tickers[i], i);
+            }
         }
     }
 
-    private void setupTickerListeners() {
+    private void setupTickerListeners(KiteTicker ticker, int tickerIndex) {
         if (ticker == null)
             return;
 
         ticker.setOnConnectedListener(new OnConnect() {
             @Override
             public void onConnected() {
-                System.out.println("LiveFeed: KiteTicker Connected.");
-                if (!subscribedTokens.isEmpty()) {
-                    subscribe(subscribedTokens);
-                }
+                System.out.println("LiveFeed: KiteTicker " + tickerIndex + " Connected.");
+                resubscribeAll();
             }
         });
 
         ticker.setOnDisconnectedListener(new OnDisconnect() {
             @Override
             public void onDisconnected() {
-                System.out.println("LiveFeed: KiteTicker Disconnected.");
+                System.out.println("LiveFeed: KiteTicker " + tickerIndex + " Disconnected.");
             }
         });
 
         ticker.setOnErrorListener(new OnError() {
             @Override
             public void onError(Exception e) {
-                System.err.println("LiveFeed: KiteTicker Error: " + e.getMessage());
+                System.err.println("LiveFeed: KiteTicker " + tickerIndex + " Error: " + e.getMessage());
             }
 
             @Override
             public void onError(KiteException e) {
-                System.err.println("LiveFeed: KiteTicker Error: " + e.message);
+                System.err.println("LiveFeed: KiteTicker " + tickerIndex + " Error: " + e.message);
             }
 
             @Override
             public void onError(String s) {
-                System.err.println("LiveFeed: KiteTicker Error: " + s);
+                System.err.println("LiveFeed: KiteTicker " + tickerIndex + " Error: " + s);
             }
         });
 
@@ -120,66 +129,91 @@ public class LiveFeed {
     }
 
     public void setInitialPrices(java.util.Map<String, Double> prices) {
-        // Not used with real WebSocket as it provides current LTP
     }
 
-    private final java.util.Set<String> subscribedTokens = java.util.Collections
-            .newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
-
     public void connect() {
-        if (ticker != null) {
-            try {
-                System.out.println("LiveFeed: Attempting WebSocket connection for " + clientCode + " (Token: "
-                        + (accessToken != null ? "Yes" : "No") + ")");
-                ticker.connect();
-            } catch (Exception e) {
-                System.err.println("LiveFeed: Connection failed for " + clientCode + ": " + e.getMessage());
-                e.printStackTrace();
+        System.out.println("LiveFeed: Attempting WebSocket connection for " + clientCode + " (Token: "
+                + (accessToken != null ? "Yes" : "No") + ")");
+        for (int i = 0; i < 3; i++) {
+            if (tickers[i] != null) {
+                try {
+                    tickers[i].connect();
+                } catch (Exception e) {
+                    System.err.println("LiveFeed: Connection failed for KiteTicker " + i + ": " + e.getMessage());
+                    e.printStackTrace();
+                }
             }
         }
     }
 
     public void subscribe(Set<String> tokens) {
         subscribedTokens.addAll(tokens);
-        if (ticker != null) {
-            ArrayList<Long> tokenIds = new ArrayList<>();
-            for (String t : tokens) {
-                try {
-                    tokenIds.add(Long.parseLong(t));
-                } catch (NumberFormatException e) {
-                    System.err.println("Invalid token ID for Zerodha (must be numeric): " + t);
-                }
-            }
-            if (!tokenIds.isEmpty()) {
-                ticker.subscribe(tokenIds);
-                ticker.setMode(tokenIds, KiteTicker.modeLTP);
-                System.out.println("LiveFeed: Sent subscription request for " + tokenIds.size() + " tokens.");
-            }
-        } else {
-            System.out.println("LiveFeed: Subscribed tokens added to pending list. Ticker not initialized yet.");
-        }
+        resubscribeAll();
     }
 
     public void unsubscribe(Set<String> tokens) {
         subscribedTokens.removeAll(tokens);
-        if (ticker != null) {
-            ArrayList<Long> tokenIds = new ArrayList<>();
-            for (String t : tokens) {
-                try {
-                    tokenIds.add(Long.parseLong(t));
-                } catch (NumberFormatException e) {
+
+        for (int i = 0; i < 3; i++) {
+            if (tickers[i] != null) {
+                ArrayList<Long> tokenIds = new ArrayList<>();
+                for (String t : tokens) {
+                    // Shard logic corresponding to subscribe
+                    if (Math.abs(t.hashCode()) % 3 == i) {
+                        try {
+                            tokenIds.add(Long.parseLong(t));
+                        } catch (NumberFormatException e) {
+                        }
+                    }
+                }
+                if (!tokenIds.isEmpty()) {
+                    tickers[i].unsubscribe(tokenIds);
+                    System.out.println("LiveFeed: Ticker " + i + " sent unsubscription request for " + tokenIds.size()
+                            + " tokens.");
                 }
             }
-            if (!tokenIds.isEmpty()) {
-                ticker.unsubscribe(tokenIds);
-                System.out.println("LiveFeed: Sent unsubscription request for " + tokenIds.size() + " tokens.");
+        }
+    }
+
+    private void resubscribeAll() {
+        if (subscribedTokens.isEmpty())
+            return;
+
+        for (int i = 0; i < 3; i++) {
+            if (tickers[i] != null) {
+                ArrayList<Long> tokenIds = new ArrayList<>();
+                for (String t : subscribedTokens) {
+                    // Shard tokens across the 3 tickers deterministically based on hash
+                    if (Math.abs(t.hashCode()) % 3 == i) {
+                        try {
+                            tokenIds.add(Long.parseLong(t));
+                        } catch (NumberFormatException e) {
+                            System.err.println("Invalid token ID: " + t);
+                        }
+                    }
+                }
+                if (!tokenIds.isEmpty()) {
+                    try {
+                        tickers[i].subscribe(tokenIds);
+                        tickers[i].setMode(tokenIds, KiteTicker.modeLTP);
+                        System.out.println("LiveFeed: Ticker " + i + " sent subscription request for " + tokenIds.size()
+                                + " tokens.");
+                    } catch (Exception e) {
+                        System.err.println("LiveFeed: Error subscribing on Ticker " + i + ": " + e.getMessage());
+                    }
+                }
             }
         }
     }
 
     public void stop() {
-        if (ticker != null) {
-            ticker.disconnect();
+        for (int i = 0; i < 3; i++) {
+            if (tickers[i] != null) {
+                try {
+                    tickers[i].disconnect();
+                } catch (Exception e) {
+                }
+            }
         }
     }
 }

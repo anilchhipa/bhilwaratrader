@@ -7,7 +7,7 @@ import axios from 'axios';
 import { API_BASE, WS_BASE } from '../config';
 import { formatSymbol } from '../helpers/formatSymbol';
 
-const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', isGrid = false, sharedOrderLines, onOrderLinesUpdate, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized }) => {
+const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', isGrid = false, sharedOrderLines, onOrderLinesUpdate, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized, onPriceUpdate, hideHeader = false }) => {
     const [interval, setTimeframe] = useState(initialInterval);
     const [data, setData] = useState([]);
     const [hoverIndex, setHoverIndex] = useState(null);
@@ -39,11 +39,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     const isScalingX = useRef(false);
     const dragStartX = useRef(0);
     const initialZoomStateX = useRef(null);
-
-    // MACD Y-Axis Scaling State
-    const isScalingY_MACD = useRef(false);
-    const initialZoomState_MACD = useRef(null);
-
     // User X-Axis Zoom Persistence (prevents reset on live update)
     const userZoomRef = useRef(null); // { start, end } or null to use default
 
@@ -51,12 +46,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     const isPanningY = useRef(false);
     const panStartY = useRef(0);
     const initialPriceRange = useRef(null);
-
-    // Manual Panning State (MACD Panel)
-    const isPanningY_MACD = useRef(false);
-    const panStartY_MACD = useRef(0);
-    const initialMACDPriceRange = useRef(null);
-
     // Initial Fetch
     useEffect(() => {
         const fetchData = async () => {
@@ -142,6 +131,17 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         return data;
     }, [data, isReplayMode, replayIndex]);
 
+    useEffect(() => {
+        if (displayData.length > 0 && onPriceUpdate && !isReplayMode) {
+            const lastCandle = displayData[displayData.length - 1];
+            const ltp = lastCandle.close;
+            const isGreen = ltp >= lastCandle.open;
+            onPriceUpdate(symbol, ltp, isGreen);
+        }
+    }, [displayData, symbol, onPriceUpdate, isReplayMode]);
+
+
+
     // Reset zoom when symbol or interval changes so we always start at the latest candles
     useEffect(() => {
         userZoomRef.current = null;
@@ -167,103 +167,96 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         return () => clearInterval(timer);
     }, [interval]);
 
-    // WebSocket Updates
+    // WebSocket Updates with auto-reconnect
     useEffect(() => {
-        if (isReplayMode) return; // Pause live data during replay
+        if (isReplayMode) return;
 
         let active = true;
-        const socket = new SockJS(WS_BASE);
-        const stomp = Stomp.over(socket);
-        stomp.debug = null;
+        let stomp = null;
+        let reconnectTimer = null;
+        let retryDelay = 2000;
 
-        stomp.connect({}, () => {
-            if (!active) {
-                stomp.disconnect();
-                return;
-            }
+        const connect = () => {
+            if (!active) return;
+            const socket = new SockJS(WS_BASE);
+            stomp = Stomp.over(socket);
+            stomp.debug = null;
 
-            stomp.subscribe(`/topic/updates/${symbol}/${interval}`, (msg) => {
+            stomp.connect({}, () => {
+                if (!active) { stomp.disconnect(); return; }
+                retryDelay = 2000; // Reset on success
+
+                stomp.subscribe(`/topic/updates/${symbol}/${interval}`, (msg) => {
+                    if (!active) return;
+                    const update = JSON.parse(msg.body);
+                    if (update.symbol === symbol && update.interval === interval) {
+                        setData(prev => {
+                            const newPoint = {
+                                timestamp: update.ohlc.t,
+                                open: update.ohlc.o, high: update.ohlc.h, low: update.ohlc.l, close: update.ohlc.c,
+                                ema15: update.indicators.EMA15,
+                                ema15_5: update.indicators.EMA15_5,
+                                ema15_15: update.indicators.EMA15_15,
+                                ema15_15_15: update.indicators.EMA15_15_15,
+                                ema15_15_15_15: update.indicators.EMA15_15_15_15,
+                                ema15_15_15_15_30: update.indicators.EMA15_15_15_15_30,
+                                stMa: update.indicators.ST_MA,
+                                stTrend: update.indicators.ST_TREND,
+
+                            };
+
+                            if (prev.length === 0) {
+                                const res = [newPoint];
+                                replayFullDataRef.current = res;
+                                return res;
+                            }
+
+                            const last = prev[prev.length - 1];
+                            let updated;
+                            const isSameTime = new Date(last.timestamp).getTime() === new Date(update.ohlc.t).getTime();
+                            if (isSameTime) {
+                                updated = [...prev];
+
+                                updated[updated.length - 1] = newPoint;
+                            } else {
+                                updated = [...prev, newPoint];
+                            }
+                            replayFullDataRef.current = updated;
+                            return updated;
+                        });
+                    }
+                });
+            }, (err) => {
                 if (!active) return;
-                const update = JSON.parse(msg.body);
-                if (update.symbol === symbol && update.interval === interval) {
-                    setData(prev => {
-                        const newPoint = {
-                            timestamp: update.ohlc.t,
-                            open: update.ohlc.o, high: update.ohlc.h, low: update.ohlc.l, close: update.ohlc.c,
-                            ema15: update.indicators.EMA15,
-                            ema15_5: update.indicators.EMA15_5,
-                            ema15_15: update.indicators.EMA15_15,
-                            ema15_15_15: update.indicators.EMA15_15_15,
-                            ema15_15_15_15: update.indicators.EMA15_15_15_15,
-                            ema15_15_15_15_30: update.indicators.EMA15_15_15_15_30,
-                            ema50: update.indicators.EMA50,
-                            ema100: update.indicators.EMA100,
-                            stMa: update.indicators.ST_MA,
-                            stTrend: update.indicators.ST_TREND,
-                            macdLine: update.indicators.MACD,
-                            signalLine: update.indicators.SIGNAL,
-                            macd5: update.indicators.MACD5,
-                            macd55: update.indicators.MACD55
-                        };
-
-                        if (prev.length === 0) {
-                            const res = [newPoint];
-                            replayFullDataRef.current = res;
-                            return res;
-                        }
-
-                        const last = prev[prev.length - 1];
-                        let updated;
-                        if (last.timestamp === update.ohlc.t) {
-                            updated = [...prev];
-                            updated[updated.length - 1] = newPoint;
-                        } else {
-                            updated = [...prev, newPoint];
-                        }
-                        replayFullDataRef.current = updated;
-                        return updated;
-                    });
-                }
+                console.warn(`WS disconnected, reconnecting in ${retryDelay / 1000}s...`);
+                reconnectTimer = setTimeout(() => {
+                    retryDelay = Math.min(retryDelay * 2, 30000); // cap at 30s
+                    connect();
+                }, retryDelay);
             });
-        }, (err) => {
-            if (active) console.error("WS connection failed", err);
-        });
+        };
+
+        connect();
 
         return () => {
             active = false;
-            if (stomp.connected) stomp.disconnect();
+            clearTimeout(reconnectTimer);
+            if (stomp && stomp.connected) stomp.disconnect();
         };
     }, [symbol, interval, isReplayMode]);
 
 
 
-    // Indicator Config (Sync with backend)
-    const [showMacd, setShowMacd] = useState(true);
+    // Indicator Config
     const [localVisibility, setLocalVisibility] = useState({
         EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
         EMA15_15_15_15_30: true, CLOUD: true,
-        EMA50: true, EMA100: true,
-        MACD: true, SIGNAL: true, MACD5: true, MACD55: true
+        EMA50: true, EMA100: true
     });
 
     const visibility = externalVisibility || localVisibility;
+    const showMacd = false; // MACD removed
 
-    useEffect(() => {
-        axios.get(`${API_BASE}/api/config`).then(res => {
-            if (res.data) {
-                setShowMacd(res.data.macdShow);
-                setLocalVisibility(prev => ({
-                    ...prev,
-                    EMA50: res.data.macdShowEMAs,
-                    EMA100: res.data.macdShowEMAs,
-                    MACD: res.data.macdShowEMAs,
-                    SIGNAL: res.data.macdShowEMAs,
-                    MACD5: res.data.macdShowEMAs,
-                    MACD55: res.data.macdShowEMAs
-                }));
-            }
-        }).catch(err => console.error("Config fetch failed", err));
-    }, []);
 
     // ─── Order Lines State ────────────────────────────────────────────────────
     // ─── Order Lines State (LIFTED to App.jsx) ────────────────────────────────
@@ -392,14 +385,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
             }
         }
 
-        // Handle Panel Resizing
-        if (isResizing.current && showMacd) {
-            const height = rect.height;
-            let newPct = (y / height) * 100;
-            newPct = Math.max(20, Math.min(newPct, 80));
-            setSplitPct(newPct);
-        }
-
         // Handle Manual Vertical Panning
         if (isPanningY.current) {
             const deltaY = e.clientY - panStartY.current;
@@ -414,25 +399,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
                 echarts.setOption({
                     yAxis: [{ min: min + priceDelta, max: max + priceDelta }]
-                });
-                echarts.getZr().setCursorStyle('grabbing');
-                return;
-            }
-        }
-
-        // Handle Manual Vertical Panning - MACD
-        if (isPanningY_MACD.current && showMacd) {
-            const deltaY = e.clientY - panStartY_MACD.current;
-            const echarts = echartRef.current?.getEchartsInstance();
-            if (echarts && initialMACDPriceRange.current) {
-                const { min, max } = initialMACDPriceRange.current;
-                const priceRange = max - min;
-                const bottomGridHeight = rect.height * ((100 - splitPct - 4) / 100);
-
-                const priceDelta = (deltaY / bottomGridHeight) * priceRange;
-
-                echarts.setOption({
-                    yAxis: [{}, { min: min + priceDelta, max: max + priceDelta }]
                 });
                 echarts.getZr().setCursorStyle('grabbing');
                 return;
@@ -484,35 +450,14 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 });
             }
         }
-
-        // Handle MACD Y-Axis Scaling
-        if (isScalingY_MACD.current && showMacd) {
-            const deltaY = dragStartY.current - e.clientY;
-            const sensitivity = 0.005;
-            const scaleFactor = Math.exp(deltaY * sensitivity);
-
-            const echarts = echartRef.current?.getEchartsInstance();
-            if (echarts && initialZoomState_MACD.current) {
-                const { min, max } = initialZoomState_MACD.current;
-                const center = (min + max) / 2;
-                const halfRange = ((max - min) / 2) * scaleFactor;
-
-                echarts.setOption({
-                    yAxis: [{}, { min: center - halfRange, max: center + halfRange }]
-                });
-            }
-        }
     };
 
     mouseHandlersRef.current.up = () => {
         isResizing.current = false;
         isScalingY.current = false;
         isScalingX.current = false;
-        isScalingY_MACD.current = false;
         isPanningY.current = false;
         initialPriceRange.current = null;
-        isPanningY_MACD.current = false;
-        initialMACDPriceRange.current = null;
 
         // Check for drag complete on order lines
         if (draggingLine.current) {
@@ -634,37 +579,11 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     }
                 }
             },
-            axisPointer: { link: showMacd ? [{ xAxisIndex: 'all' }] : [], label: { backgroundColor: '#333' } },
-            grid: showMacd ? [
-                { left: '5px', right: '35px', top: '5%', height: `${Math.max(10, splitPct - 5)}%` },
-                { left: '5px', right: '35px', top: `${splitPct + 4}%`, height: `${Math.max(5, 91 - splitPct)}%` }
-            ] : [
+            axisPointer: { link: [], label: { backgroundColor: '#333' } },
+            grid: [
                 { left: '5px', right: '35px', top: '5%', height: '90%' }
             ],
-            xAxis: showMacd ? [
-                {
-                    type: 'category',
-                    data: timestamps,
-                    boundaryGap: true,
-                    axisLine: { lineStyle: { color: '#333' } },
-                    axisLabel: { show: false },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(43, 43, 67, 0.4)' } },
-                    axisPointer: { label: { formatter: (params) => params.value || '' } }
-                },
-                {
-                    gridIndex: 1,
-                    type: 'category',
-                    data: timestamps,
-                    boundaryGap: true,
-                    axisLine: { lineStyle: { color: '#333' } },
-                    axisLabel: {
-                        color: '#d1d4dc',
-                        fontSize: 10,
-                        formatter: (val) => val  // already 'DD Mon HH:MM'
-                    },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(43, 43, 67, 0.4)' } }
-                }
-            ] : [
+            xAxis: [
                 {
                     type: 'category',
                     data: timestamps,
@@ -678,23 +597,8 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     splitLine: { show: true, lineStyle: { color: 'rgba(43, 43, 67, 0.4)' } }
                 }
             ],
-            yAxis: showMacd ? [
-                {
-                    scale: true,
-                    position: 'right',
-                    axisLine: { show: false },
-                    axisLabel: { color: '#64748b', fontSize: 10, formatter: v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0) },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(255, 255, 255, 0.03)' } }
-                },
-                {
-                    gridIndex: 1,
-                    scale: true,
-                    position: 'right',
-                    axisLine: { show: false },
-                    axisLabel: { color: '#64748b', fontSize: 10, formatter: v => v.toFixed(1) },
-                    splitLine: { show: false }
-                }
-            ] : [
+
+            yAxis: [
                 {
                     scale: true,
                     position: 'right',
@@ -724,17 +628,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     zoomOnMouseWheel: false,
                     moveOnMouseWheel: true, // Allow wheel move (panning)
                     moveOnMouseMove: true      // Allow drag panning
-                },
-                // MACD Y-Axis Zoom
-                ...(showMacd ? [{
-                    type: 'inside',
-                    yAxisIndex: [1],
-                    filterMode: 'empty',
-                    orient: 'vertical',
-                    zoomOnMouseWheel: false,
-                    moveOnMouseWheel: true,
-                    moveOnMouseMove: true
-                }] : [])
+                }
             ],
             series: [
                 {
@@ -744,6 +638,36 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     itemStyle: {
                         color: '#26a69a', color0: '#ef5350',
                         borderColor: '#26a69a', borderColor0: '#ef5350'
+                    },
+                    markPoint: {
+                        symbol: 'arrow',
+                        symbolSize: 10,
+                        data: visibility.SIGNALS ? (() => {
+                            const pts = [];
+                            for (let i = 1; i < displayData.length; i++) {
+                                const prev = displayData[i - 1];
+                                const curr = displayData[i];
+                                if (prev.stTrend === -1 && curr.stTrend === 1) {
+                                    pts.push({
+                                        name: 'BUY',
+                                        coord: [i, curr.low],
+                                        value: 'B',
+                                        itemStyle: { color: '#22c55e' },
+                                        label: { show: true, position: 'bottom', distance: 5, color: '#22c55e', fontSize: 10, fontWeight: 'bold' }
+                                    });
+                                } else if (prev.stTrend === 1 && curr.stTrend === -1) {
+                                    pts.push({
+                                        name: 'SELL',
+                                        coord: [i, curr.high],
+                                        value: 'S',
+                                        itemStyle: { color: '#ef4444' },
+                                        symbolRotate: 180,
+                                        label: { show: true, position: 'top', distance: 5, color: '#ef4444', fontSize: 10, fontWeight: 'bold' }
+                                    });
+                                }
+                            }
+                            return pts;
+                        })() : []
                     },
                     markLine: {
                         silent: true,
@@ -760,6 +684,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                                     lineStyle: { color: v.color, width: 1 },
                                     label: { formatter: `${v.label}: ${parseFloat(v.price).toFixed(2)}`, color: v.color, backgroundColor: 'rgba(13,13,30,0.85)', borderColor: v.color, borderWidth: 1, borderRadius: 3 }
                                 })),
+                            // LTP Line removed as per request to display on left side panel
                             // 10:12 AM Reference Lines
                             ...(visibility["1012_OPEN_CLOSE"] ? (() => {
                                 // Find all candles at 10:12 and pick the most recent one
@@ -855,209 +780,205 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 { name: 'EMA15', type: 'line', data: visibility.EMA15 ? displayData.map(c => c.ema15) : null, itemStyle: { color: '#ffffff' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA15_5', type: 'line', data: visibility.EMA15_5 ? displayData.map(c => c.ema15_5) : null, itemStyle: { color: '#ef5350' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA15_15', type: 'line', data: visibility.EMA15_15 ? displayData.map(c => c.ema15_15) : null, itemStyle: { color: '#2196f3' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                { name: 'EMA15_15_15', type: 'line', data: visibility.EMA15_15_15 ? displayData.map(c => c.ema15_15_15) : null, itemStyle: { color: '#ef5350' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
+                { name: 'EMA15_15_15', type: 'line', data: visibility.EMA15_15_15 ? displayData.map(c => c.ema15_15_15) : null, itemStyle: { color: '#4caf50' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA15_15_15_15', type: 'line', data: visibility.EMA15_15_15_15 ? displayData.map(c => c.ema15_15_15_15) : null, itemStyle: { color: '#ffeb3b' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                { name: 'EMA15_15_15_15_30', type: 'line', data: visibility.EMA15_15_15_15_30 ? displayData.map(c => c.ema15_15_15_15_30) : null, itemStyle: { color: '#ef5350' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
+                { name: 'EMA15_15_15_15_30', type: 'line', data: visibility.EMA15_15_15_15_30 ? displayData.map(c => c.ema15_15_15_15_30) : null, itemStyle: { color: '#00bcd4' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA50', type: 'line', data: visibility.EMA50 ? displayData.map(c => c.ema50) : null, itemStyle: { color: '#ff9800' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1.5 } },
                 { name: 'EMA100', type: 'line', data: visibility.EMA100 ? displayData.map(c => c.ema100) : null, itemStyle: { color: '#9c27b0' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1.5 } },
 
-                ...(showMacd ? [
-                    { name: 'MACD', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: visibility.MACD ? displayData.map(c => c.macdLine) : null, itemStyle: { color: '#ffffff' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                    { name: 'Signal', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: visibility.SIGNAL ? displayData.map(c => c.signalLine) : null, itemStyle: { color: '#ef5350' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                    { name: 'MACD5', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: visibility.MACD5 ? displayData.map(c => c.macd5) : null, itemStyle: { color: '#2196f3' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                    { name: 'MACD55', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: visibility.MACD55 ? displayData.map(c => c.macd55) : null, itemStyle: { color: '#ef5350' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } }
-                ] : [])
+
 
             ]
         };
-    }, [displayData, symbol, visibility, interval, splitPct, showMacd, orderLines]);
+    }, [displayData, symbol, visibility, interval, splitPct, orderLines]);
 
     return (
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: isGrid ? '5px' : '10px', position: 'relative' }}>
             {/* Legend & Stats Overlay - Smaller in Grid */}
-            <div style={{
-                padding: isGrid ? '4px 12px' : '6px 20px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: 'rgba(30,34,45, 0.4)',
-                backdropFilter: 'blur(8px)',
-                borderRadius: '10px',
-                border: '1px solid rgba(255,255,255,0.03)'
-            }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <h2 style={{ margin: 0, color: '#f8fafc', fontSize: isGrid ? '12px' : '16px', fontWeight: 700, letterSpacing: '-0.3px' }}>
-                        {formatSymbol(symbol)} <span style={{ color: '#64748b', fontWeight: 400 }}>{interval}</span>
-                    </h2>
-                    {!isGrid && (
-                        <div className="pill-bar">
-                            {['1min', '3min', '5min', '15min'].map(tf => (
-                                <button
-                                    key={tf}
-                                    className={`pill-btn ${interval === tf ? 'active' : ''}`}
-                                    onClick={() => setTimeframe(tf)}
-                                >
-                                    {tf}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    {/* Integrated Order Line Controls */}
-                    <div style={{ display: 'flex', gap: '6px', height: '28px', alignItems: 'center' }}>
-                        {Object.entries(orderLines).map(([key, line]) => (
-                            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '28px' }}>
-                                <button
-                                    onClick={() => toggleOrderLine(key)}
-                                    title={`Toggle ${line.label}`}
-                                    style={{
-                                        width: '14px', height: '14px', borderRadius: '3px',
-                                        border: `1.5px solid ${line.color}`,
-                                        background: line.visible ? line.color : 'transparent',
-                                        cursor: 'pointer', padding: 0, flexShrink: 0,
-                                        transition: 'all 0.2s'
-                                    }}
-                                />
-                                {!isGrid && <span style={{ color: line.color, fontSize: '10px', fontWeight: 700 }}>{line.label}</span>}
-                                {isGrid && <span style={{ color: line.color, fontSize: '9px', fontWeight: 700 }}>{line.label.substring(0, 1)}</span>}
-
-                                {line.visible && (
-                                    <input
-                                        type="number"
-                                        step="0.5"
-                                        value={line.price}
-                                        onChange={e => setOrderPrice(key, e.target.value)}
-                                        style={{
-                                            width: '42px', background: 'transparent',
-                                            border: 'none', borderBottom: `1px solid ${line.color}`,
-                                            color: '#eee', fontSize: '10px', padding: '0 2px',
-                                            height: '20px', textAlign: 'center', outline: 'none'
-                                        }}
-                                        placeholder="0.00"
-                                    />
-                                )}
+            {!hideHeader && (
+                <div style={{
+                    padding: isGrid ? '4px 12px' : '6px 20px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    background: 'rgba(30,34,45, 0.4)',
+                    backdropFilter: 'blur(8px)',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(255,255,255,0.03)'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <h2 style={{ margin: 0, color: '#f8fafc', fontSize: isGrid ? '12px' : '16px', fontWeight: 700, letterSpacing: '-0.3px' }}>
+                            {formatSymbol(symbol)} <span style={{ color: '#fbbf24', fontWeight: 600, marginLeft: '6px' }}>{interval}</span>
+                        </h2>
+                        {!isGrid && (
+                            <div className="pill-bar">
+                                {['1min', '3min', '5min', '15min'].map(tf => (
+                                    <button
+                                        key={tf}
+                                        className={`pill-btn ${interval === tf ? 'active' : ''}`}
+                                        onClick={() => setTimeframe(tf)}
+                                    >
+                                        {tf}
+                                    </button>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-
-
-                    <div style={{ color: status.state === 'error' ? '#ef5350' : '#26a69a', fontSize: isGrid ? '10px' : '12px', fontWeight: 'bold', height: '28px', display: 'flex', alignItems: 'center' }}>{status.msg}</div>
-                    {!isGrid && <div style={{ color: '#aaa', fontSize: '11px', height: '28px', display: 'flex', alignItems: 'center' }}>{displayData.length} Bars</div>}
-
-                    {/* Compact Replay Controls */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: isGrid ? '4px' : '10px', background: 'rgba(0,0,0,0.2)', height: '28px', padding: '0 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                        <button
-                            onClick={() => {
-                                if (isReplayMode) {
-                                    setIsReplayMode(false);
-                                    setIsReplaying(false);
-                                } else {
-                                    setIsReplayMode(true);
-                                    setReplayIndex(Math.max(0, data.length - 100));
-                                }
-                            }}
-                            title={isReplayMode ? "Exit Replay Mode" : "Enter Replay Mode"}
-                            style={{
-                                background: isReplayMode ? 'var(--accent-crimson)' : 'var(--accent-neon-blue)',
-                                color: 'white', border: 'none', borderRadius: '4px',
-                                padding: 0,
-                                height: '22px',
-                                minWidth: isGrid ? '22px' : '70px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: isGrid ? '0' : '0 8px',
-                                fontSize: isGrid ? '9px' : '10px',
-                                cursor: 'pointer',
-                                fontWeight: '800',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.4px',
-                                boxShadow: isReplayMode ? '0 2px 8px rgba(239, 68, 68, 0.2)' : '0 2px 8px rgba(59, 130, 246, 0.2)'
-                            }}
-                        >
-                            {isReplayMode ? (isGrid ? '⏹' : '⏹ EXIT') : (isGrid ? '🎬' : '🎬 REPLAY')}
-                        </button>
-
-                        {isReplayMode && (
-                            <>
-                                <button
-                                    onClick={() => { setIsReplaying(false); setReplayIndex(prev => Math.max(0, prev - 1)); }}
-                                    style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
-                                    title="Step Backward"
-                                >
-                                    ⏪
-                                </button>
-                                <button
-                                    onClick={() => setIsReplaying(!isReplaying)}
-                                    style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
-                                    title={isReplaying ? "Pause" : "Play"}
-                                >
-                                    {isReplaying ? '⏸' : '▶️'}
-                                </button>
-                                <button
-                                    onClick={() => { setIsReplaying(false); setReplayIndex(prev => Math.min(replayFullDataRef.current.length - 1, prev + 1)); }}
-                                    style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
-                                    title="Step Forward"
-                                >
-                                    ⏩
-                                </button>
-
-                                {!isGrid && (
-                                    <>
-                                        <div style={{ width: '1px', height: '16px', background: '#4d5057', margin: '0 4px' }} />
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max={Math.max(0, replayFullDataRef.current.length - 1)}
-                                            value={replayIndex}
-                                            onChange={(e) => { setIsReplaying(false); setReplayIndex(parseInt(e.target.value)); }}
-                                            style={{ width: '100px', height: '4px', cursor: 'pointer' }}
-                                        />
-                                        <select
-                                            value={replaySpeed}
-                                            onChange={(e) => setReplaySpeed(parseInt(e.target.value))}
-                                            style={{ background: '#1e222d', color: '#d1d4dc', border: '1px solid #4d5057', fontSize: '10px', borderRadius: '3px', padding: '2px' }}
-                                        >
-                                            <option value="1000">1x</option>
-                                            <option value="500">2x</option>
-                                            <option value="200">5x</option>
-                                            <option value="100">10x</option>
-                                            <option value="50">20x</option>
-                                        </select>
-                                    </>
-                                )}
-                            </>
                         )}
                     </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {/* Integrated Order Line Controls */}
+                        <div style={{ display: 'flex', gap: '6px', height: '28px', alignItems: 'center' }}>
+                            {Object.entries(orderLines).map(([key, line]) => (
+                                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '28px' }}>
+                                    <button
+                                        onClick={() => toggleOrderLine(key)}
+                                        title={`Toggle ${line.label}`}
+                                        style={{
+                                            width: '14px', height: '14px', borderRadius: '3px',
+                                            border: `1.5px solid ${line.color}`,
+                                            background: line.visible ? line.color : 'transparent',
+                                            cursor: 'pointer', padding: 0, flexShrink: 0,
+                                            transition: 'all 0.2s'
+                                        }}
+                                    />
+                                    {!isGrid && <span style={{ color: line.color, fontSize: '10px', fontWeight: 700 }}>{line.label}</span>}
+                                    {isGrid && <span style={{ color: line.color, fontSize: '9px', fontWeight: 700 }}>{line.label.substring(0, 1)}</span>}
 
-                    {/* Integrated Maximize/Minimize */}
-                    {onMaximize && (
-                        <div style={{ display: 'flex', alignItems: 'center', height: '28px' }}>
-                            <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.1)', margin: '0 6px' }} />
-                            {isMaximized ? (
-                                <button
-                                    className="minimize-btn"
-                                    onClick={onMaximize}
-                                    style={{ height: '22px', padding: '0 8px', background: 'rgba(239, 68, 68, 0.1)', color: '#fb7185', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '4px', fontSize: '9px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                                >
-                                    <span>✕</span> <span>EXIT {interval.toUpperCase()}</span>
-                                </button>
-                            ) : (
-                                <button
-                                    className="maximize-btn"
-                                    onClick={onMaximize}
-                                    style={{ width: '22px', height: '22px', background: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                    title="Maximize Chart"
-                                >
-                                    ⛶
-                                </button>
+                                    {line.visible && (
+                                        <input
+                                            type="number"
+                                            step="0.5"
+                                            value={line.price}
+                                            onChange={e => setOrderPrice(key, e.target.value)}
+                                            style={{
+                                                width: '42px', background: 'transparent',
+                                                border: 'none', borderBottom: `1px solid ${line.color}`,
+                                                color: '#eee', fontSize: '10px', padding: '0 2px',
+                                                height: '20px', textAlign: 'center', outline: 'none'
+                                            }}
+                                            placeholder="0.00"
+                                        />
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+
+                        <div style={{ color: status.state === 'error' ? '#ef5350' : '#26a69a', fontSize: isGrid ? '10px' : '12px', fontWeight: 'bold', height: '28px', display: 'flex', alignItems: 'center' }}>{status.msg}</div>
+                        {!isGrid && <div style={{ color: '#aaa', fontSize: '11px', height: '28px', display: 'flex', alignItems: 'center' }}>{displayData.length} Bars</div>}
+
+                        {/* Compact Replay Controls */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: isGrid ? '4px' : '10px', background: 'rgba(0,0,0,0.2)', height: '28px', padding: '0 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <button
+                                onClick={() => {
+                                    if (isReplayMode) {
+                                        setIsReplayMode(false);
+                                        setIsReplaying(false);
+                                    } else {
+                                        setIsReplayMode(true);
+                                        setReplayIndex(Math.max(0, data.length - 100));
+                                    }
+                                }}
+                                title={isReplayMode ? "Exit Replay Mode" : "Enter Replay Mode"}
+                                style={{
+                                    background: isReplayMode ? 'var(--accent-crimson)' : 'var(--accent-neon-blue)',
+                                    color: 'white', border: 'none', borderRadius: '4px',
+                                    height: '22px',
+                                    minWidth: isGrid ? '22px' : '70px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: isGrid ? '0' : '0 8px',
+                                    fontSize: isGrid ? '9px' : '10px',
+                                    cursor: 'pointer',
+                                    fontWeight: '800',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.4px',
+                                    boxShadow: isReplayMode ? '0 2px 8px rgba(239, 68, 68, 0.2)' : '0 2px 8px rgba(59, 130, 246, 0.2)'
+                                }}
+                            >
+                                {isReplayMode ? (isGrid ? '⏹' : '⏹ EXIT') : (isGrid ? '🎬' : '🎬 REPLAY')}
+                            </button>
+
+                            {isReplayMode && (
+                                <>
+                                    <button
+                                        onClick={() => { setIsReplaying(false); setReplayIndex(prev => Math.max(0, prev - 1)); }}
+                                        style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
+                                        title="Step Backward"
+                                    >
+                                        ⏪
+                                    </button>
+                                    <button
+                                        onClick={() => setIsReplaying(!isReplaying)}
+                                        style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
+                                        title={isReplaying ? "Pause" : "Play"}
+                                    >
+                                        {isReplaying ? '⏸' : '▶️'}
+                                    </button>
+                                    <button
+                                        onClick={() => { setIsReplaying(false); setReplayIndex(prev => Math.min(replayFullDataRef.current.length - 1, prev + 1)); }}
+                                        style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: isGrid ? '12px' : '16px', padding: '0 4px' }}
+                                        title="Step Forward"
+                                    >
+                                        ⏩
+                                    </button>
+
+                                    {!isGrid && (
+                                        <>
+                                            <div style={{ width: '1px', height: '16px', background: '#4d5057', margin: '0 4px' }} />
+                                            <input
+                                                type="range"
+                                                min="0"
+                                                max={Math.max(0, replayFullDataRef.current.length - 1)}
+                                                value={replayIndex}
+                                                onChange={(e) => { setIsReplaying(false); setReplayIndex(parseInt(e.target.value)); }}
+                                                style={{ width: '100px', height: '4px', cursor: 'pointer' }}
+                                            />
+                                            <select
+                                                value={replaySpeed}
+                                                onChange={(e) => setReplaySpeed(parseInt(e.target.value))}
+                                                style={{ background: '#1e222d', color: '#d1d4dc', border: '1px solid #4d5057', fontSize: '10px', borderRadius: '3px', padding: '2px' }}
+                                            >
+                                                <option value="1000">1x</option>
+                                                <option value="500">2x</option>
+                                                <option value="200">5x</option>
+                                                <option value="100">10x</option>
+                                                <option value="50">20x</option>
+                                            </select>
+                                        </>
+                                    )}
+                                </>
                             )}
                         </div>
-                    )}
 
+                        {/* Integrated Maximize/Minimize */}
+                        {onMaximize && (
+                            <div style={{ display: 'flex', alignItems: 'center', height: '28px' }}>
+                                <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.1)', margin: '0 6px' }} />
+                                {isMaximized ? (
+                                    <button
+                                        className="minimize-btn"
+                                        onClick={onMaximize}
+                                        style={{ height: '22px', padding: '0 8px', background: 'rgba(239, 68, 68, 0.1)', color: '#fb7185', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '4px', fontSize: '9px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                    >
+                                        <span>✕</span> <span>EXIT {interval.toUpperCase()}</span>
+                                    </button>
+                                ) : (
+                                    <button
+                                        className="maximize-btn"
+                                        onClick={onMaximize}
+                                        style={{ width: '22px', height: '22px', background: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                        title="Maximize Chart"
+                                    >
+                                        ⛶
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                    </div>
                 </div>
-            </div>
+            )}
 
 
 
@@ -1074,7 +995,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 onMouseMove={(e) => {
                     // Start with basic hover detection if not dragging
                     if (!containerRef.current) return;
-                    if (isScalingX.current || isScalingY.current || isScalingY_MACD.current || isResizing.current) return;
+                    if (isScalingX.current || isScalingY.current || isResizing.current) return;
 
                     const rect = containerRef.current.getBoundingClientRect();
                     const x = e.clientX - rect.left;
@@ -1197,7 +1118,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     // Check if click is in the MACD Y-axis area (Bottom Grid Right Axis)
                     const bottomGridTop = rect.height * ((splitPct + 4) / 100);
                     if (showMacd && x > rect.width - 55 && y > bottomGridTop && y < rect.height - 30) {
-                        isScalingY_MACD.current = true;
                         dragStartY.current = e.clientY;
                         const echarts = echartRef.current?.getEchartsInstance();
                         if (echarts) {
@@ -1254,26 +1174,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         e.preventDefault();
                     }
 
-                    // ─── Handle Manual Vertical Panning (MACD) ──────────────────────────
-                    if (showMacd && !isScalingY_MACD.current && !isScalingX.current && !draggingLine.current && !placingLine.current && y > bottomGridTop && y < rect.height - 30 && x < rect.width - 55) {
-                        isPanningY_MACD.current = true;
-                        panStartY_MACD.current = e.clientY;
-                        const echarts = echartRef.current?.getEchartsInstance();
-                        if (echarts) {
-                            const opt = echarts.getOption();
-                            let yMin = opt?.yAxis?.[1]?.min;
-                            let yMax = opt?.yAxis?.[1]?.max;
-                            if (yMin == null || yMax == null || typeof yMin === 'string' || typeof yMax === 'string') {
-                                const visibleModel = echarts.getModel().getComponent('yAxis', 1);
-                                const extent = visibleModel?.axis?.scale?.getExtent?.();
-                                yMin = extent ? extent[0] : 0;
-                                yMax = extent ? extent[1] : 100;
-                            }
-                            initialMACDPriceRange.current = { min: yMin, max: yMax };
-                            echarts.getZr().setCursorStyle('grabbing');
-                        }
-                        e.preventDefault();
-                    }
+
                 }}
             >
                 {/* Data Overlay removed */}
@@ -1353,7 +1254,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                                 zIndex: 100,
                                 boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
                                 pointerEvents: 'auto',
-                                userSelect: 'none',
                                 transition: draggingLine.current?.key === key ? 'none' : 'top 0.1s ease-out'
                             }}>
                             <div style={{
@@ -1371,40 +1271,48 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                                     type="number"
                                     value={line.quantity}
                                     onChange={(e) => setOrderQuantity(key, parseInt(e.target.value) || 0)}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onFocus={(e) => e.target.select()}
                                     style={{
-                                        width: '45px', background: '#2b2b43', border: '1px solid rgba(255,255,255,0.1)',
-                                        color: '#fff', fontSize: '11px', borderRadius: '3px', padding: '2px 4px',
+                                        width: '45px', height: '22px', background: 'rgba(255,255,255,0.05)',
+                                        border: '1px solid rgba(255,255,255,0.1)',
+                                        color: '#fff', fontSize: '11px', borderRadius: '4px', padding: '0 4px',
                                         textAlign: 'center', outline: 'none'
                                     }}
                                 />
-                                <span style={{ position: 'absolute', right: '-12px', color: '#666', fontSize: '8px' }}>QTY</span>
+                                <span style={{ position: 'absolute', right: '-10px', color: '#666', fontSize: '8px', pointerEvents: 'none' }}>Q</span>
                             </div>
 
-                            <div style={{ display: 'flex', background: '#2b2b43', borderRadius: '4px', padding: '2px', marginLeft: '5px' }}>
+                            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', padding: '2px', marginLeft: '5px' }}>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setOrderAction(key, 'BUY'); }}
+                                    title="BUY"
                                     style={{
-                                        padding: '2px 8px', fontSize: '10px', border: 'none', borderRadius: '3px',
+                                        width: '26px', height: '20px', fontSize: '10px', border: 'none', borderRadius: '3px',
                                         background: line.action === 'BUY' ? '#26a69a' : 'transparent',
                                         color: line.action === 'BUY' ? '#fff' : '#888',
-                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s'
+                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.1s',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
                                     }}
-                                >BUY</button>
+                                >B</button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setOrderAction(key, 'SELL'); }}
+                                    title="SELL"
                                     style={{
-                                        padding: '2px 8px', fontSize: '10px', border: 'none', borderRadius: '3px',
+                                        width: '26px', height: '20px', fontSize: '10px', border: 'none', borderRadius: '3px',
                                         background: line.action === 'SELL' ? '#ef5350' : 'transparent',
                                         color: line.action === 'SELL' ? '#fff' : '#888',
-                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s'
+                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.1s',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
                                     }}
-                                >SELL</button>
+                                >S</button>
                             </div>
 
                             <div
                                 style={{
-                                    marginLeft: '4px', padding: '2px', cursor: 'pointer',
-                                    color: '#666'
+                                    marginLeft: '4px', width: '20px', height: '20px',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: 'pointer', color: '#666', fontSize: '12px'
                                 }}
                                 onClick={(e) => { e.stopPropagation(); toggleOrderLine(key); }}
                                 title="Close"

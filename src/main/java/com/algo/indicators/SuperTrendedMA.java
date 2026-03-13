@@ -43,6 +43,33 @@ public class SuperTrendedMA {
         this.changeATR = changeATR;
     }
 
+    /**
+     * Adopts state from a known baseline (e.g. from database)
+     */
+    public void adoptState(Double ma, Double up, Double dn, Integer trend, double lastPrice) {
+        this.liveEma = (ma != null) ? ma : 0;
+        this.liveUp = (up != null) ? up : 0;
+        this.liveDn = (dn != null) ? dn : 0;
+        this.liveTrend = (trend != null) ? trend : 1;
+        this.liveClose = lastPrice;
+
+        this.lastEma = liveEma;
+        this.lastUp = liveUp;
+        this.lastDn = liveDn;
+        this.trend = liveTrend;
+        this.prevTrend = liveTrend;
+        this.lastClose = lastPrice;
+
+        // Populate history with at least one point to prevent TR calculation issues
+        if (ma != null) {
+            maHistory.add(ma);
+            upHistory.add(liveUp);
+            dnHistory.add(liveDn);
+            trendHistory.add(liveTrend);
+            srcHistory.add(lastPrice);
+        }
+    }
+
     public void commit() {
         lastEma = liveEma;
         lastUp = liveUp;
@@ -109,9 +136,9 @@ public class SuperTrendedMA {
                 dn = (lastClose < lastDn) ? Math.min(dn, lastDn) : dn;
 
                 if (currentTrend == -1 && close > dn) {
-                    currentTrend = 1; // Buy Signal
+                    currentTrend = 1;
                 } else if (currentTrend == 1 && close < up) {
-                    currentTrend = -1; // Sell Signal
+                    currentTrend = -1;
                 }
             } else {
                 up = currentEma - multiplier * currentAtr;
@@ -177,14 +204,6 @@ public class SuperTrendedMA {
 
     public int getTrend() {
         return trend;
-    }
-
-    public boolean isBuySignal() {
-        return trend == 1 && prevTrend == -1;
-    }
-
-    public boolean isSellSignal() {
-        return trend == -1 && prevTrend == 1;
     }
 
     public List<Double> getMaHistory() {

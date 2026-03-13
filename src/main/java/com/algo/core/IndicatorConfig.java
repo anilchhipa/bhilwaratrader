@@ -30,20 +30,6 @@ public class IndicatorConfig {
     @Value("${indicator.ema.cascade5:30}")
     private int emaCascade5;
 
-    // --- Standalone EMAs (used for MACD) ---
-    @Value("${indicator.ema.fast:50}")
-    private int emaFast;
-
-    @Value("${indicator.ema.slow:100}")
-    private int emaSlow;
-
-    // --- MACD ---
-    @Value("${indicator.macd.signal:5}")
-    private int macdSignal;
-
-    @Value("${indicator.macd.signal2:5}")
-    private int macdSignal2;
-
     // --- SuperTrend ---
     @Value("${indicator.supertrend.maLength:42}")
     private int stMaLength;
@@ -53,13 +39,6 @@ public class IndicatorConfig {
 
     @Value("${indicator.supertrend.multiplier:0.5}")
     private double stMultiplier;
-
-    // --- Visibility ---
-    @Value("${indicator.macd.show:true}")
-    private boolean macdShow;
-
-    @Value("${indicator.macd.showEMAs:true}")
-    private boolean macdShowEMAs;
 
     // --- Getters ---
 
@@ -87,22 +66,6 @@ public class IndicatorConfig {
         return emaCascade5;
     }
 
-    public int getEmaFast() {
-        return emaFast;
-    }
-
-    public int getEmaSlow() {
-        return emaSlow;
-    }
-
-    public int getMacdSignal() {
-        return macdSignal;
-    }
-
-    public int getMacdSignal2() {
-        return macdSignal2;
-    }
-
     public int getStMaLength() {
         return stMaLength;
     }
@@ -115,23 +78,12 @@ public class IndicatorConfig {
         return stMultiplier;
     }
 
-    public boolean isMacdShow() {
-        return macdShow;
-    }
-
-    public boolean isMacdShowEMAs() {
-        return macdShowEMAs;
-    }
-
     @Override
     public String toString() {
         return String.format(
-                "IndicatorConfig{ema=%d, cascades=[%d,%d,%d,%d,%d], fast=%d, slow=%d, " +
-                        "macdSignal=%d, macdSignal2=%d, st=[ma=%d, atr=%d, mult=%.2f], " +
-                        "showMacd=%b, showMacdEMAs=%b}",
+                "IndicatorConfig{ema=%d, cascades=[%d,%d,%d,%d,%d], " +
+                        "st=[ma=%d, atr=%d, mult=%.2f]}",
                 emaPeriod1, emaCascade1, emaCascade2, emaCascade3, emaCascade4, emaCascade5,
-                emaFast, emaSlow, macdSignal, macdSignal2,
-                stMaLength, stAtrPeriod, stMultiplier,
-                macdShow, macdShowEMAs);
+                stMaLength, stAtrPeriod, stMultiplier);
     }
 }

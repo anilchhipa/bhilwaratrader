@@ -13,28 +13,26 @@ import com.algo.data.LiveFeed;
 import com.algo.web.LiveUpdateBroadcaster;
 import org.springframework.boot.CommandLineRunner;
 import java.util.Set;
-import java.util.HashSet;
 
 @SpringBootApplication
 @org.springframework.scheduling.annotation.EnableScheduling
 public class TradingApplication {
 
     public static void main(String[] args) {
-        // Skip Playwright's automatic browser check/download on every startup
-        // to prevent delays and "Removing unused browser" messages.
-        // Requires browsers to be already installed in ~/.cache/ms-playwright/
-        System.setProperty("playwright.skip.browser.download", "true");
-        System.setProperty("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
-
         SpringApplication.run(TradingApplication.class, args);
     }
 
     @Bean
     public ZerodhaClient zerodhaClient() {
-        // Use user credentials
-        // userId, password, apiKey, apiSecret, totpSecret
-        return new ZerodhaClient("VX7625", "A1S2$#@!aaa", "wlxn2xin3anb1eq3", "um5sre6ybkgcqp4vwc95aioubnhnl86c",
-                "NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5");
+        String userId = System.getenv("KITE_USER_ID") != null ? System.getenv("KITE_USER_ID") : "VX7625";
+        String password = System.getenv("KITE_PASSWORD") != null ? System.getenv("KITE_PASSWORD") : "A1S2$#@!aaa";
+        String apiKey = System.getenv("KITE_API_KEY") != null ? System.getenv("KITE_API_KEY") : "wlxn2xin3anb1eq3";
+        String apiSecret = System.getenv("KITE_API_SECRET") != null ? System.getenv("KITE_API_SECRET")
+                : "um5sre6ybkgcqp4vwc95aioubnhnl86c";
+        String totpSecret = System.getenv("KITE_TOTP_SECRET") != null ? System.getenv("KITE_TOTP_SECRET")
+                : "NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5";
+
+        return new ZerodhaClient(userId, password, apiKey, apiSecret, totpSecret);
     }
 
     @Bean
@@ -44,12 +42,18 @@ public class TradingApplication {
 
     @Bean
     public RedisClient redisClient() {
-        return new RedisClient("localhost", 6379);
+        String host = System.getenv("REDIS_HOST") != null ? System.getenv("REDIS_HOST") : "localhost";
+        int port = System.getenv("REDIS_PORT") != null ? Integer.parseInt(System.getenv("REDIS_PORT")) : 6379;
+        return new RedisClient(host, port);
     }
 
     @Bean
     public TimescaleClient timescaleClient() {
-        return new TimescaleClient("jdbc:postgresql://localhost:5432/postgres", "postgres", "password");
+        String url = System.getenv("DATABASE_URL") != null ? System.getenv("DATABASE_URL")
+                : "jdbc:postgresql://localhost:5432/postgres";
+        String user = System.getenv("DATABASE_USER") != null ? System.getenv("DATABASE_USER") : "postgres";
+        String pass = System.getenv("DATABASE_PASS") != null ? System.getenv("DATABASE_PASS") : "password";
+        return new TimescaleClient(url, user, pass);
     }
 
     @Bean
@@ -67,9 +71,8 @@ public class TradingApplication {
 
     @Bean
     public LiveFeed liveFeed(ZerodhaClient zerodhaClient, TokenManager tokenManager, Engine engine) {
-        // Use same apiKey and userId as ZerodhaClient to avoid KiteTicker 403
-        String apiKey = "wlxn2xin3anb1eq3";
-        String clientCode = "VX7625";
+        String apiKey = System.getenv("KITE_API_KEY") != null ? System.getenv("KITE_API_KEY") : "wlxn2xin3anb1eq3";
+        String clientCode = System.getenv("KITE_USER_ID") != null ? System.getenv("KITE_USER_ID") : "VX7625";
 
         return new LiveFeed(clientCode, apiKey, tokenManager, engine, (token, price) -> {
             // Optional: Log tick or extra processing
@@ -102,6 +105,9 @@ public class TradingApplication {
         return args -> {
             try {
                 System.out.println("Starting Trading Application...");
+
+                // 0a. Initialize/Verify Schema
+                timescaleRepository.initializeSchema();
 
                 // 0. Load symbols from DB
                 java.util.List<String[]> tracked = timescaleRepository.getTrackedSymbols();

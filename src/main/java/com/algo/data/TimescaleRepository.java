@@ -18,6 +18,88 @@ public class TimescaleRepository {
     }
 
     /**
+     * Ensures all necessary tables and hypertables exist in TimescaleDB.
+     */
+    public void initializeSchema() {
+        Connection conn = null;
+        try {
+            conn = timescaleClient.getConnection();
+            if (conn == null)
+                return;
+            try (Statement stmt = conn.createStatement()) {
+                // Table: tracked_symbols
+                stmt.execute("CREATE TABLE IF NOT EXISTS tracked_symbols (" +
+                        "symbol TEXT PRIMARY KEY, " +
+                        "exchange TEXT NOT NULL" +
+                        ")");
+
+                // Table: candles
+                stmt.execute("CREATE TABLE IF NOT EXISTS candles (" +
+                        "time TIMESTAMPTZ NOT NULL, " +
+                        "symbol TEXT NOT NULL, " +
+                        "interval TEXT NOT NULL, " +
+                        "open DOUBLE PRECISION NOT NULL, " +
+                        "high DOUBLE PRECISION NOT NULL, " +
+                        "low DOUBLE PRECISION NOT NULL, " +
+                        "close DOUBLE PRECISION NOT NULL, " +
+                        "volume BIGINT NOT NULL, " +
+                        "ema15 DOUBLE PRECISION, " +
+                        "ema15_5 DOUBLE PRECISION, " +
+                        "ema15_15 DOUBLE PRECISION, " +
+                        "ema15_15_15 DOUBLE PRECISION, " +
+                        "ema15_15_15_15 DOUBLE PRECISION, " +
+                        "ema15_15_15_15_30 DOUBLE PRECISION, " +
+                        "ema50 DOUBLE PRECISION, " +
+                        "ema100 DOUBLE PRECISION, " +
+                        "st_ma DOUBLE PRECISION, " +
+                        "st_up DOUBLE PRECISION, " +
+                        "st_dn DOUBLE PRECISION, " +
+                        "st_trend INTEGER, " +
+                        "macd_line DOUBLE PRECISION, " +
+                        "signal_line DOUBLE PRECISION, " +
+                        "macd_5 DOUBLE PRECISION, " +
+                        "macd_5_5 DOUBLE PRECISION, " +
+                        "PRIMARY KEY (time, symbol, interval)" +
+                        ")");
+
+                // Convert to hypertable (catch error if already hypertable)
+                try {
+                    stmt.execute("SELECT create_hypertable('candles', 'time', if_not_exists => TRUE)");
+                } catch (SQLException e) {
+                    // Ignore if already hypertable or if TimescaleDB extension is not fully active
+                }
+
+                // Indexes
+                stmt.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_candles_symbol_interval_time ON candles (symbol, interval, time DESC)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_candles_time ON candles (time DESC)");
+
+                // Table: data_sync_status
+                stmt.execute("CREATE TABLE IF NOT EXISTS data_sync_status (" +
+                        "symbol TEXT NOT NULL, " +
+                        "interval TEXT NOT NULL, " +
+                        "earliest_candle TIMESTAMPTZ, " +
+                        "latest_candle TIMESTAMPTZ, " +
+                        "total_candles INTEGER, " +
+                        "last_sync_attempt TIMESTAMPTZ, " +
+                        "PRIMARY KEY (symbol, interval)" +
+                        ")");
+
+                System.out.println("TimescaleRepository: Database schema verified/initialized.");
+            }
+        } catch (SQLException e) {
+            System.err.println("Error initializing database schema: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                }
+            }
+        }
+    }
+
+    /**
      * Save a list of candles to TimescaleDB (bulk insert with duplicate handling)
      */
     public int saveCandles(List<Candle> candles, String symbol, String interval) {
@@ -26,19 +108,16 @@ public class TimescaleRepository {
         }
 
         String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
-                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_30, ema5, ema50, ema100, " +
-                "st_ma, st_up, st_dn, st_trend, macd_line, signal_line, macd_5, macd_5_5) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
+                "st_ma, st_up, st_dn, st_trend) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
                 "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
                 "ema15 = EXCLUDED.ema15, ema15_5 = EXCLUDED.ema15_5, ema15_15 = EXCLUDED.ema15_15, " +
-                "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_30 = EXCLUDED.ema15_30, ema5 = EXCLUDED.ema5, " +
-                "ema50 = EXCLUDED.ema50, ema100 = EXCLUDED.ema100, " +
-                "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, "
+                "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_15_15_15 = EXCLUDED.ema15_15_15_15, ema15_15_15_15_30 = EXCLUDED.ema15_15_15_15_30, "
                 +
-                "macd_line = EXCLUDED.macd_line, signal_line = EXCLUDED.signal_line, " +
-                "macd_5 = EXCLUDED.macd_5, macd_5_5 = EXCLUDED.macd_5_5";
+                "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend";
 
         int savedCount = 0;
         Connection conn = null;
@@ -68,18 +147,12 @@ public class TimescaleRepository {
                     setDoubleOrNull(pstmt, 10, candle.getEma15_5());
                     setDoubleOrNull(pstmt, 11, candle.getEma15_15());
                     setDoubleOrNull(pstmt, 12, candle.getEma15_15_15());
-                    setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15()); // mapped to ema15_30
-                    setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30()); // mapped to ema5
-                    setDoubleOrNull(pstmt, 15, candle.getEma50());
-                    setDoubleOrNull(pstmt, 16, candle.getEma100());
-                    setDoubleOrNull(pstmt, 17, candle.getStMa());
-                    setDoubleOrNull(pstmt, 18, candle.getStUp());
-                    setDoubleOrNull(pstmt, 19, candle.getStDn());
-                    setIntegerOrNull(pstmt, 20, candle.getStTrend());
-                    setDoubleOrNull(pstmt, 21, candle.getMacdLine());
-                    setDoubleOrNull(pstmt, 22, candle.getSignalLine());
-                    setDoubleOrNull(pstmt, 23, candle.getMacd5());
-                    setDoubleOrNull(pstmt, 24, candle.getMacd55());
+                    setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15());
+                    setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30());
+                    setDoubleOrNull(pstmt, 15, candle.getStMa());
+                    setDoubleOrNull(pstmt, 16, candle.getStUp());
+                    setDoubleOrNull(pstmt, 17, candle.getStDn());
+                    setIntegerOrNull(pstmt, 18, candle.getStTrend());
 
                     pstmt.addBatch();
                 }
@@ -121,8 +194,8 @@ public class TimescaleRepository {
     public List<Candle> getLatestCandles(String symbol, String interval, int count) {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, volume, " +
-                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_30, ema5, ema50, ema100, " +
-                "st_ma, st_up, st_dn, st_trend, macd_line, signal_line, macd_5, macd_5_5 " +
+                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
+                "st_ma, st_up, st_dn, st_trend " +
                 "FROM candles " +
                 "WHERE symbol = ? AND interval = ? " +
                 "ORDER BY time DESC " +
@@ -154,19 +227,13 @@ public class TimescaleRepository {
                     candle.setEma15_5(getDoubleOrNull(rs, "ema15_5"));
                     candle.setEma15_15(getDoubleOrNull(rs, "ema15_15"));
                     candle.setEma15_15_15(getDoubleOrNull(rs, "ema15_15_15"));
-                    candle.setEma15_15_15_15(getDoubleOrNull(rs, "ema15_30"));
-                    candle.setEma15_15_15_15_30(getDoubleOrNull(rs, "ema5"));
-                    candle.setEma50(getDoubleOrNull(rs, "ema50"));
+                    candle.setEma15_15_15_15(getDoubleOrNull(rs, "ema15_15_15_15"));
+                    candle.setEma15_15_15_15_30(getDoubleOrNull(rs, "ema15_15_15_15_30"));
 
-                    candle.setEma100(getDoubleOrNull(rs, "ema100"));
                     candle.setStMa(getDoubleOrNull(rs, "st_ma"));
                     candle.setStUp(getDoubleOrNull(rs, "st_up"));
                     candle.setStDn(getDoubleOrNull(rs, "st_dn"));
                     candle.setStTrend(getIntegerOrNull(rs, "st_trend"));
-                    candle.setMacdLine(getDoubleOrNull(rs, "macd_line"));
-                    candle.setSignalLine(getDoubleOrNull(rs, "signal_line"));
-                    candle.setMacd5(getDoubleOrNull(rs, "macd_5"));
-                    candle.setMacd55(getDoubleOrNull(rs, "macd_5_5"));
 
                     candles.add(candle);
                 }

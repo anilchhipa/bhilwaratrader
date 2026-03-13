@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Algo Trading — Flow Diagram</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 12px;
+            padding: 24px;
+            min-height: 100vh;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 20px;
+            font-weight: 700;
+            color: #58a6ff;
+            margin-bottom: 28px;
+            letter-spacing: 1px;
+        }
+
+        /* ── Layout ── */
+        .root {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .span2 {
+            grid-column: 1 / -1;
+        }
+
+        .row {
+            display: flex;
+            align-items: stretch;
+            gap: 16px;
+        }
+
+        /* ── Section labels ── */
+        .section-label {
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            padding: 8px 6px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            opacity: 0.85;
+        }
+
+        .sl-startup {
+            background: #1c2d1c;
+            color: #3fb950;
+            border: 1px solid #3fb950;
+        }
+
+        .sl-live {
+            background: #1c2338;
+            color: #58a6ff;
+            border: 1px solid #58a6ff;
+        }
+
+        .sl-sched {
+            background: #2d2010;
+            color: #e3b341;
+            border: 1px solid #e3b341;
+        }
+
+        .sl-frontend {
+            background: #2d1c2e;
+            color: #bc8cff;
+            border: 1px solid #bc8cff;
+        }
+
+        /* ── Flow strip ── */
+        .flow {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0;
+            padding: 14px 12px;
+            background: #161b22;
+            border-radius: 10px;
+            border: 1px solid #30363d;
+            overflow-x: auto;
+        }
+
+        /* ── Nodes ── */
+        .node {
+            border-radius: 8px;
+            padding: 8px 12px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: nowrap;
+            position: relative;
+        }
+
+        .node sub {
+            font-size: 9px;
+            font-weight: 400;
+            display: block;
+            opacity: 0.75;
+        }
+
+        .ext {
+            background: #1a2e1a;
+            border: 1.5px solid #3fb950;
+            color: #3fb950;
+        }
+
+        /* external */
+        .proc {
+            background: #1a2438;
+            border: 1.5px solid #58a6ff;
+            color: #58a6ff;
+        }
+
+        /* processing */
+        .store {
+            background: #1e1e2e;
+            border: 1.5px solid #bc8cff;
+            color: #bc8cff;
+        }
+
+        /* storage */
+        .ui {
+            background: #2a1e38;
+            border: 1.5px solid #d2a8ff;
+            color: #d2a8ff;
+        }
+
+        /* frontend */
+        .sched {
+            background: #2a1e10;
+            border: 1.5px solid #e3b341;
+            color: #e3b341;
+        }
+
+        /* scheduler */
+        .ws {
+            background: #1e2a2a;
+            border: 1.5px solid #39d353;
+            color: #39d353;
+        }
+
+        /* websocket */
+
+        /* ── Arrows ── */
+        .arr {
+            font-size: 16px;
+            color: #8b949e;
+            padding: 0 6px;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .arr-label {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 4px;
+            flex-shrink: 0;
+        }
+
+        .arr-label .lbl {
+            font-size: 9px;
+            color: #8b949e;
+            white-space: nowrap;
+            margin-bottom: 2px;
+            font-style: italic;
+        }
+
+        /* ── Fork / Join ── */
+        .fork-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .fork-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* ── Two-column layout for Live section ── */
+        .live-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .live-top {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            flex-wrap: wrap;
+        }
+
+        .live-outputs {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding-left: 20px;
+        }
+
+        .output-branch {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* ── TF grid ── */
+        .tf-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            border: 1px dashed #30363d;
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: #0d1117;
+        }
+
+        .tf-grid .title {
+            font-size: 9px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+            font-weight: 700;
+        }
+
+        .tf-chips {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .chip {
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 3px 7px;
+            font-size: 10px;
+            color: #8b949e;
+            font-weight: 600;
+        }
+
+        .ind-chips {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+
+        .ind-chip {
+            background: #21262d;
+            border: 1px solid #58a6ff66;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 9px;
+            color: #79c0ff;
+        }
+
+        /* ── Scheduler panel ── */
+        .sched-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .sched-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sched-time {
+            font-weight: 700;
+            font-size: 9px;
+            color: #e3b341;
+            white-space: nowrap;
+            min-width: 80px;
+            text-align: right;
+        }
+
+        /* ── Frontend ── */
+        .fe-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+        }
+
+        .fe-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .chart-grid {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .chart-chip {
+            background: #21262d;
+            border: 1px solid #d2a8ff55;
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 10px;
+            color: #d2a8ff;
+            font-weight: 600;
+        }
+
+        /* Store legend row */
+        .legend {
+            display: flex;
+            gap: 14px;
+            justify-content: center;
+            padding: 12px;
+            background: #161b22;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            flex-wrap: wrap;
+        }
+
+        .leg-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .leg-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .divider {
+            border: none;
+            border-top: 1px solid #21262d;
+            margin: 4px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>⚡ Algo Trading — Application Flow Diagram</h1>
+
+    <div class="root">
+
+        <!-- ═══════════════ LEGEND ═══════════════ -->
+        <div class="legend span2">
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#3fb950;border:1.5px solid #3fb950"></div> External (Angel One)
+            </div>
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#58a6ff;border:1.5px solid #58a6ff"></div> Processing
+            </div>
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#bc8cff;border:1.5px solid #bc8cff"></div> Storage
+            </div>
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#39d353;border:1.5px solid #39d353"></div> WebSocket
+            </div>
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#d2a8ff;border:1.5px solid #d2a8ff"></div> Frontend UI
+            </div>
+            <div class="leg-item">
+                <div class="leg-dot" style="background:#e3b341;border:1.5px solid #e3b341"></div> Scheduler
+            </div>
+        </div>
+
+        <!-- ═══════════════ STARTUP ═══════════════ -->
+        <div class="row">
+            <div class="section-label sl-startup">STARTUP</div>
+            <div class="flow">
+                <div class="node ext">Angel One<sub>REST API</sub></div>
+                <div class="arr">→</div>
+                <div class="node proc">AngelClient<sub>.login()</sub></div>
+                <div class="arr">→</div>
+                <div class="node proc">MarketSession<br>Manager<sub>preMarketSync</sub></div>
+                <div class="arr">→</div>
+                <div class="node proc">Historical<br>DataService<sub>loadInitialData</sub></div>
+                <div class="arr">→</div>
+                <div class="node store">TimescaleDB<sub>save candles</sub></div>
+                <div class="arr">→</div>
+                <div class="node proc">syncAllSymbols<br>ToRedis<sub>populate cache</sub></div>
+                <div class="arr">→</div>
+                <div class="node store">Redis<sub>live cache</sub></div>
+                <div class="arr" style="margin-left:12px;">→</div>
+                <div class="node proc">LiveFeed<sub>.connect()</sub></div>
+                <div class="arr">→</div>
+                <div class="node ext">SmartStream<br>WebSocket<sub>subscribe tokens</sub></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ LIVE TICK (spans both columns) ═══════════════ -->
+        <div class="row span2">
+            <div class="section-label sl-live">LIVE TICK</div>
+            <div class="flow" style="flex-direction:column; align-items:flex-start; gap:14px;">
+
+                <!-- Top: tick arrival → engine → symbolstate -->
+                <div class="live-top">
+                    <div class="node ext">SmartStream<sub>LTP in paise</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">LiveFeed<sub>onLTPArrival<br>÷100 = price</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">Engine<sub>onTick(token, price)</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">TokenManager<sub>token→symbol</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">SymbolState<sub>.update(price, time)</sub></div>
+                    <div class="arr">→</div>
+
+                    <!-- Timeframe processing -->
+                    <div class="tf-grid">
+                        <div class="title">Per Timeframe</div>
+                        <div class="tf-chips">
+                            <span class="chip">1min</span><span class="chip">3min</span><span class="chip">5min</span>
+                            <span class="chip">10min</span><span class="chip">15min</span><span
+                                class="chip">30min</span><span class="chip">1h</span>
+                        </div>
+                        <div style="font-size:9px;color:#8b949e;margin-top:4px;">New period? → close candle → open new
+                        </div>
+                        <div style="font-size:9px;color:#8b949e;">Same period? → update H/L/C</div>
+                        <div class="ind-chips">
+                            <span class="ind-chip">Strategy</span>
+                            <span class="ind-chip">EMA 15/50/100</span>
+                            <span class="ind-chip">MACD</span>
+                            <span class="ind-chip">Signal</span>
+                            <span class="ind-chip">Supertrend</span>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="divider" style="width:100%">
+
+                <!-- Outputs -->
+                <div class="live-outputs">
+                    <div class="output-branch">
+                        <div class="arr">→</div>
+                        <div class="node proc">Engine<sub>syncToRedis</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node store">Redis<sub>OHLC + Indicators</sub></div>
+                    </div>
+                    <div style="color:#30363d;font-size:18px;align-self:center;">│</div>
+                    <div class="output-branch">
+                        <div class="arr">→</div>
+                        <div class="node proc">LiveUpdate<br>Broadcaster<sub>broadcastUpdate</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node ws">WebSocket<sub>/topic/updates</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node ui">React<sub>STOMP subscribe</sub></div>
+                    </div>
+                    <div style="color:#30363d;font-size:18px;align-self:center;">│</div>
+                    <div class="output-branch">
+                        <div class="arr">→</div>
+                        <div class="node store">SymbolState<sub>sessionCandles[]<br>in-memory buffer</sub></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ SCHEDULER ═══════════════ -->
+        <div class="row">
+            <div class="section-label sl-sched">SCHEDULER</div>
+            <div class="flow" style="flex-direction:column; gap:10px; align-items:flex-start;">
+                <div style="font-size:10px;color:#e3b341;font-weight:700;">@Scheduled every minute — MON to FRI</div>
+                <div class="sched-panel">
+
+                    <div class="sched-row">
+                        <div class="sched-time">Before 9:15 AM</div>
+                        <div class="arr">→</div>
+                        <div class="node sched">Pre-Market</div>
+                        <div class="arr">→</div>
+                        <div class="node proc">HistoricalDataService<sub>loadInitialData</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node store">TimescaleDB</div>
+                        <div class="arr">+</div>
+                        <div class="node proc">syncAllSymbols<br>ToRedis</div>
+                        <div class="arr">→</div>
+                        <div class="node store">Redis</div>
+                    </div>
+
+                    <div class="sched-row">
+                        <div class="sched-time">9:15 – 3:15 PM</div>
+                        <div class="arr">→</div>
+                        <div class="node sched">Live Market</div>
+                        <div class="arr">→</div>
+                        <div class="node proc">Engine<sub>onTick loops</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node store">In-Memory<sub>sessionCandles</sub></div>
+                        <div style="font-size:10px;color:#8b949e;margin-left:8px;">← no DB writes during market hours
+                        </div>
+                    </div>
+
+                    <div class="sched-row">
+                        <div class="sched-time">3:16 PM</div>
+                        <div class="arr">→</div>
+                        <div class="node sched">Flush Time</div>
+                        <div class="arr">→</div>
+                        <div class="node proc">Engine<sub>flushSessionToDatabase</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node proc">TimescaleRepository<sub>saveCandles (batch)</sub></div>
+                        <div class="arr">→</div>
+                        <div class="node store">TimescaleDB<sub>all session candles</sub></div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ FRONTEND ═══════════════ -->
+        <div class="row">
+            <div class="section-label sl-frontend">FRONTEND</div>
+            <div class="flow" style="flex-direction:column; gap:12px; align-items:flex-start;">
+
+                <!-- REST path -->
+                <div class="fe-row">
+                    <div class="node ui">React App<sub>ETradingChart.jsx</sub></div>
+                    <div class="arr-label"><span class="lbl">GET /api/history/symbol/interval</span><span
+                            style="color:#8b949e;font-size:16px;">→</span></div>
+                    <div class="node proc">TradingController<sub>/api/history</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node store">TimescaleDB<sub>latest 500 candles</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">Stale check<sub>&gt; 5 min behind</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node proc">HistoricalDataService<sub>syncData (if stale)</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node ui">Render<br>Historical</div>
+                </div>
+
+                <hr class="divider" style="width:100%">
+
+                <!-- WebSocket path -->
+                <div class="fe-row">
+                    <div class="node ws">WebSocket<sub>/topic/updates</sub></div>
+                    <div class="arr-label"><span class="lbl">STOMP JSON {symbol, interval, ohlc, indicators}</span><span
+                            style="color:#8b949e;font-size:16px;">→</span></div>
+                    <div class="node ui">React<sub>useEffect subscriber</sub></div>
+                    <div class="arr">→</div>
+                    <div class="node ui">ECharts<sub>update series</sub></div>
+                    <div class="arr">→</div>
+                    <div class="chart-grid">
+                        <span class="chart-chip">Candlestick</span>
+                        <span class="chart-chip">MACD Panel</span>
+                        <span class="chart-chip">SuperTrend</span>
+                        <span class="chart-chip">EMA Lines</span>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+</body>
+
+</html>

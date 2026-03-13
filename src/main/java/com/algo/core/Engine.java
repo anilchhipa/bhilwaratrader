@@ -1,5 +1,6 @@
 package com.algo.core;
 
+import com.algo.core.MarketUtils;
 import com.algo.data.TokenManager;
 import com.algo.data.RedisClient;
 import com.algo.data.TimescaleRepository;
@@ -8,9 +9,13 @@ import org.json.JSONObject;
 import java.util.Map;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 import java.util.Collections;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * The central brain of the application.
@@ -23,6 +28,10 @@ public class Engine {
     private final TimescaleRepository timescaleRepository;
     private final LiveUpdateBroadcaster broadcaster;
     private final IndicatorConfig indicatorConfig;
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
+    private final ExecutorService asyncPool = Executors.newFixedThreadPool(20);
+    private final ConcurrentHashMap<String, Long> lastTickQueueTime = new ConcurrentHashMap<>();
 
     public Engine(TokenManager tokenManager, RedisClient redisClient, TimescaleRepository timescaleRepository,
             LiveUpdateBroadcaster broadcaster, IndicatorConfig indicatorConfig) {
@@ -80,22 +89,28 @@ public class Engine {
     }
 
     public void onTick(String token, double price) {
-        String symbol = tokenManager.getSymbol(token);
-        if (symbol == null) {
+        if (!MarketUtils.isMarketOpen()) {
             return;
         }
 
-        // Temporary diagnostic for symbol cross-pollination
-        if (price > 1000 && !symbol.equals("RELIANCE")) {
-            System.out.println("Engine DIAGNOSTIC: Token " + token + " (" + symbol + ") received high price: " + price);
+        String symbol = tokenManager.getSymbol(token);
+        if (symbol == null) {
+            return;
         }
 
         SymbolState state = symbolStates.get(symbol);
         if (state != null) {
             state.update(price, LocalDateTime.now());
 
-            // Sync to Redis (Throttled or sampled)
-            syncToRedis(state);
+            long now = System.currentTimeMillis();
+            long lastQueue = lastTickQueueTime.getOrDefault(symbol, 0L);
+
+            // Throttle async dispatch to max 10 times per second per symbol
+            // This prevents overwhelming the thread pool during high market volatility
+            if (now - lastQueue >= 100) {
+                lastTickQueueTime.put(symbol, now);
+                CompletableFuture.runAsync(() -> syncToRedis(state), asyncPool);
+            }
         }
     }
 
@@ -110,7 +125,7 @@ public class Engine {
                     .put("h", candle.getHigh())
                     .put("l", candle.getLow())
                     .put("c", candle.getClose())
-                    .put("t", candle.getTimestamp().toString());
+                    .put("t", candle.getTimestamp().format(ISO_FORMATTER));
 
             Map<String, Double> indicators = state.getIndicatorValues().get(interval);
             JSONObject indJson = new JSONObject(indicators);

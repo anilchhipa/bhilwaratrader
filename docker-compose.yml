@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  timescale:
+    image: timescale/timescaledb:latest-pg14
+    container_name: algo-db
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: always
+
+  redis:
+    image: redis:alpine
+    container_name: algo-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: algo-backend
+    environment:
+      - DATABASE_URL=jdbc:postgresql://timescale:5432/postgres
+      - DATABASE_USER=postgres
+      - DATABASE_PASS=password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Zerodha Credentials should ideally be passed as env too
+      - KITE_API_KEY=wlxn2xin3anb1eq3
+      - KITE_API_SECRET=um5sre6ybkgcqp4vwc95aioubnhnl86c
+      - KITE_USER_ID=VX7625
+      - KITE_PASSWORD=A1S2$#@!aaa
+      - KITE_TOTP_SECRET=NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5
+    depends_on:
+      - timescale
+      - redis
+    ports:
+      - "8085:8085"
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: algo-frontend
+    ports:
+      - "80:80"
+    restart: always
+
+volumes:
+  timescale_data:

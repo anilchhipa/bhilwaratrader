@@ -1,7 +1,7 @@
 import React from 'react';
 import { formatSymbol } from '../helpers/formatSymbol';
 
-const SymbolList = ({ symbols, onSymbolSelect, selectedSymbol }) => {
+const SymbolList = ({ symbols, onSymbolSelect, selectedSymbol, symbolPrices = {} }) => {
     const categorize = () => {
         const stocks = [];
         const futures = [];
@@ -37,11 +37,31 @@ const SymbolList = ({ symbols, onSymbolSelect, selectedSymbol }) => {
                         onClick={() => onSymbolSelect(s)}
                     >
                         <span className="symbol-name">{formatSymbol(s)}</span>
-                        {selectedSymbol === s && (
-                            <div className="live-tag">
-                                <span className="live-dot"></span>
-                                <span>LIVE</span>
+                        {symbolPrices[s] ? (
+                            <div
+                                className="live-tag"
+                                style={{
+                                    backgroundColor: symbolPrices[s].isGreen ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                    borderColor: symbolPrices[s].isGreen ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                    color: symbolPrices[s].isGreen ? '#4ade80' : '#f87171'
+                                }}
+                            >
+                                <span
+                                    className="live-dot"
+                                    style={{
+                                        backgroundColor: symbolPrices[s].isGreen ? '#22c55e' : '#ef4444',
+                                        boxShadow: `0 0 8px ${symbolPrices[s].isGreen ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'}`
+                                    }}
+                                ></span>
+                                <span>{symbolPrices[s].price.toFixed(2)}</span>
                             </div>
+                        ) : (
+                            selectedSymbol === s && (
+                                <div className="live-tag">
+                                    <span className="live-dot"></span>
+                                    <span>LIVE</span>
+                                </div>
+                            )
                         )}
                     </div>
                 ))}
