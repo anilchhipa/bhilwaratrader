@@ -22,6 +22,7 @@ function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [showReadyPopup, setShowReadyPopup] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Use a ref to prevent closure issues in the polling interval
   const hasShownReadyPopup = React.useRef(false);
@@ -145,32 +146,23 @@ function App() {
 
   return (
     <div className="app-container">
-      <div className="main-content">
-        {/* Connection Status Overlay */}
-        {isOffline && (
-          <div className="connection-overlay">
-            <div className="status-card">
-              <div className="spinner"></div>
-              <h2>Backend Offline</h2>
-              <p>Waiting for trading engine to start...</p>
-            </div>
-          </div>
+      <div className={`main-content ${mobileSidebarOpen ? 'sidebar-open' : ''}`}>
+        {mobileSidebarOpen && (
+          <div
+            className="sidebar-backdrop"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
         )}
-
-        {/* System Ready Popup */}
-        {showReadyPopup && (
-          <div className="ready-popup" onClick={() => setShowReadyPopup(false)}>
-            <div className="ready-icon">⚡</div>
-            <div className="ready-content">
-              <h3>System Ready</h3>
-              <p>Trading Engine is online & synced.</p>
-            </div>
-          </div>
-        )}
-
+        <button
+          className="mobile-toggle-btn"
+          onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+          aria-label="Toggle Sidebar"
+        >
+          {mobileSidebarOpen ? '✕' : '☰'}
+        </button>
         {/* Glass Sidebar */}
         {/* Unified Glass Sidebar */}
-        <aside className="sidebar">
+        <aside className={`sidebar ${mobileSidebarOpen ? 'mobile-show' : ''}`}>
           <div className="sidebar-header">
             <h3 className="outfit">Market Signals</h3>
             <div className="header-actions">
@@ -186,7 +178,10 @@ function App() {
           <div className="symbol-list-container">
             <SignalMatrixList
               symbols={trackedSymbols}
-              onSymbolSelect={setSelectedSymbol}
+              onSymbolSelect={(s) => {
+                setSelectedSymbol(s);
+                setMobileSidebarOpen(false); // Close on mobile after selection
+              }}
               selectedSymbol={selectedSymbol}
               symbolPrices={symbolPrices}
             />

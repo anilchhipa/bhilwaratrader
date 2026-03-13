@@ -995,3 +995,124 @@
 .flip-alert .sym-text {
   color: #fbbf24 !important;
 }
+
+/* --- Mobile Responsive System --- */
+.mobile-toggle-btn {
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  border-radius: 25px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  font-size: 24px;
+  z-index: 1000;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    padding: 8px;
+  }
+
+  .main-content {
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+    height: 100%;
+  }
+
+  .mobile-toggle-btn {
+    display: flex;
+  }
+
+  /* Sidebar transforms into a slide-over mobile drawer */
+  .sidebar,
+  .dashboard-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 280px !important;
+    min-width: 280px !important;
+    z-index: 999;
+    transform: translateX(-105%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 0 16px 16px 0;
+    box-shadow: 15px 0 30px rgba(0, 0, 0, 0.6);
+  }
+
+  .sidebar.mobile-show {
+    transform: translateX(0);
+  }
+
+  .charts-grid {
+    grid-template-columns: 1fr !important;
+    /* Stack charts vertically */
+    gap: 8px;
+  }
+
+  .grid-chart-item {
+    height: 45vh;
+    /* Larger charts on mobile */
+  }
+
+  .chart-section {
+    flex: 1;
+    width: 100%;
+    overflow-y: auto;
+    padding-bottom: 80px;
+    /* Space for the toggle button */
+  }
+
+  /* Adjust Matrix Density for Touch */
+  .matrix-row td {
+    padding: 12px 2px;
+    /* Bigger touch targets */
+  }
+
+  .sym-text {
+    font-size: 12px;
+  }
+
+  .price-text {
+    font-size: 11px;
+  }
+
+  .trend-box {
+    width: 14px;
+    height: 14px;
+  }
+
+  .bias-box {
+    height: 14px;
+  }
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 998;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
