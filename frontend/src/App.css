@@ -1053,14 +1053,16 @@
   }
 
   .charts-grid {
-    grid-template-columns: 1fr !important;
-    /* Stack charts vertically */
-    gap: 8px;
+    display: flex !important;
+    flex-direction: column;
+    gap: 16px;
+    height: auto;
   }
 
   .grid-chart-item {
-    height: 45vh;
-    /* Larger charts on mobile */
+    width: 100%;
+    height: calc(100vh - 80px);
+    /* Near full screen per chart minus space for buttons/margins */
   }
 
   .chart-section {
@@ -1115,4 +1117,173 @@
   to {
     opacity: 1;
   }
+}
+
+/* --- Scalping Confluence System --- */
+@keyframes confluenceGlowLong {
+  0% {
+    box-shadow: inset 0 0 10px rgba(16, 185, 129, 0.2);
+    background: rgba(16, 185, 129, 0.05);
+  }
+
+  50% {
+    box-shadow: inset 0 0 25px rgba(251, 191, 36, 0.4);
+    background: rgba(16, 185, 129, 0.15);
+  }
+
+  100% {
+    box-shadow: inset 0 0 10px rgba(16, 185, 129, 0.2);
+    background: rgba(16, 185, 129, 0.05);
+  }
+}
+
+@keyframes confluenceGlowShort {
+  0% {
+    box-shadow: inset 0 0 10px rgba(244, 63, 94, 0.2);
+    background: rgba(244, 63, 94, 0.05);
+  }
+
+  50% {
+    box-shadow: inset 0 0 25px rgba(251, 191, 36, 0.4);
+    background: rgba(244, 63, 94, 0.15);
+  }
+
+  100% {
+    box-shadow: inset 0 0 10px rgba(244, 63, 94, 0.2);
+    background: rgba(244, 63, 94, 0.05);
+  }
+}
+
+.confluence-long {
+  animation: confluenceGlowLong 2s infinite ease-in-out;
+  border-left: 4px solid #10b981 !important;
+}
+
+.confluence-short {
+  animation: confluenceGlowShort 2s infinite ease-in-out;
+  border-left: 4px solid #f43f5e !important;
+}
+
+.confluence-long .sym-text,
+.confluence-long .price-text {
+  color: #10b981 !important;
+  text-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+}
+
+.confluence-short .sym-text,
+.confluence-short .price-text {
+  color: #f43f5e !important;
+  text-shadow: 0 0 10px rgba(244, 63, 94, 0.5);
+}
+
+/* --- Scalp Trigger Alert (The "Take Trade" Moment) --- */
+@keyframes scalpTriggerActiveLong {
+  0% {
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow: inset 0 0 10px rgba(59, 130, 246, 0.2);
+  }
+
+  50% {
+    background: rgba(59, 130, 246, 0.4);
+    box-shadow: inset 0 0 40px rgba(251, 191, 36, 0.8), 0 0 20px rgba(251, 191, 36, 0.4);
+  }
+
+  100% {
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow: inset 0 0 10px rgba(59, 130, 246, 0.2);
+  }
+}
+
+@keyframes scalpTriggerActiveShort {
+  0% {
+    background: rgba(244, 63, 94, 0.1);
+    box-shadow: inset 0 0 10px rgba(244, 63, 94, 0.2);
+  }
+
+  50% {
+    background: rgba(244, 63, 94, 0.4);
+    box-shadow: inset 0 0 40px rgba(251, 191, 36, 0.8), 0 0 20px rgba(251, 191, 36, 0.4);
+  }
+
+  100% {
+    background: rgba(244, 63, 94, 0.1);
+    box-shadow: inset 0 0 10px rgba(244, 63, 94, 0.2);
+  }
+}
+
+.scalp-trigger-long {
+  animation: scalpTriggerActiveLong 1s infinite ease-in-out !important;
+  border-left: 6px solid #3b82f6 !important;
+  z-index: 10;
+}
+
+.scalp-trigger-short {
+  animation: scalpTriggerActiveShort 1s infinite ease-in-out !important;
+  border-left: 6px solid #f43f5e !important;
+  z-index: 10;
+}
+
+/* Restoring Blue for Bullish to match the "Blue Cloud" intent */
+.u-bg,
+.e-u-bg {
+  background: #3b82f6 !important;
+  /* Premium Blue */
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+}
+
+.scalp-trigger-long .sym-text {
+  color: #fbbf24 !important;
+  /* Gold text for the trigger instrument */
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+/* --- Scalp Chase System (Distance Guard) --- */
+@keyframes scalpChaseActiveLong {
+  0% {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  50% {
+    background: rgba(59, 130, 246, 0.2);
+    box-shadow: inset 0 0 20px rgba(245, 158, 11, 0.4);
+  }
+
+  100% {
+    background: rgba(59, 130, 246, 0.05);
+  }
+}
+
+@keyframes scalpChaseActiveShort {
+  0% {
+    background: rgba(244, 63, 94, 0.05);
+  }
+
+  50% {
+    background: rgba(244, 63, 94, 0.2);
+    box-shadow: inset 0 0 20px rgba(245, 158, 11, 0.4);
+  }
+
+  100% {
+    background: rgba(244, 63, 94, 0.05);
+  }
+}
+
+.scalp-chase-long {
+  animation: scalpChaseActiveLong 2s infinite ease-in-out !important;
+  border-left: 4px solid #f59e0b !important;
+  /* Warning Amber */
+}
+
+.scalp-chase-short {
+  animation: scalpChaseActiveShort 2s infinite ease-in-out !important;
+  border-left: 4px solid #f59e0b !important;
+  /* Warning Amber */
+}
+
+.scalp-chase-long .sym-text,
+.scalp-chase-short .sym-text {
+  color: #f59e0b !important;
+  /* Warning Amber text */
+  font-style: italic;
 }

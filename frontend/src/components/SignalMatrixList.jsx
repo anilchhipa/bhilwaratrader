@@ -38,7 +38,19 @@ const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelec
         return items.map(symbol => {
             const data = symbolPrices[symbol] || {};
             const stTrendByTf = data.stTrendByTf || {};
+            const emaBiasByTf = data.emaBiasByTf || {};
             const lastFlips = data.lastFlipTimes || {};
+
+            const isLongConfluence = ['1min', '3min', '5min', '15min'].every(tf => stTrendByTf[tf] === 1);
+            const isShortConfluence = ['1min', '3min', '5min', '15min'].every(tf => stTrendByTf[tf] === -1);
+
+            // Scalp Trigger: Higher TFs aligned + 1M just flipped
+            const isScalpLong = ['3min', '5min', '15min'].every(tf => stTrendByTf[tf] === 1) &&
+                stTrendByTf['1min'] === 1 && isRecent(lastFlips['1min']);
+
+            const isScalpShort = ['3min', '5min', '15min'].every(tf => stTrendByTf[tf] === -1) &&
+                stTrendByTf['1min'] === -1 && isRecent(lastFlips['1min']);
+
             const hasRecentFlip = Object.values(lastFlips).some(ts => isRecent(ts));
             const isActive = selectedSymbol === symbol;
             const priceData = symbolPrices[symbol];
@@ -46,7 +58,7 @@ const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelec
             return (
                 <tr
                     key={symbol}
-                    className={`matrix-row ${isActive ? 'active-row' : ''} ${hasRecentFlip ? 'flip-alert' : ''}`}
+                    className={`matrix-row ${isActive ? 'active-row' : ''} ${hasRecentFlip ? 'flip-alert' : ''} ${isLongConfluence ? 'confluence-long' : ''} ${isShortConfluence ? 'confluence-short' : ''} ${isScalpLong ? 'scalp-trigger-long' : ''} ${isScalpShort ? 'scalp-trigger-short' : ''}`}
                     onClick={() => onSymbolSelect(symbol)}
                 >
                     <td className="symbol-cell-main">
