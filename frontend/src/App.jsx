@@ -5,6 +5,7 @@ import ETradingChart from './components/ETradingChart';
 import SymbolList from './components/SymbolList';
 import ManageSymbols from './components/ManageSymbols';
 import ChartConfig from './components/ChartConfig';
+import BreadthWidget from './components/BreadthWidget';
 import { formatSymbol } from './helpers/formatSymbol';
 
 import SignalMatrixList from './components/SignalMatrixList';
@@ -42,19 +43,38 @@ function App() {
 
   // Visibility State for Technical Indicators
   const [visibility, setVisibility] = useState(() => {
-    const saved = localStorage.getItem('chartVisibility');
-    return saved ? JSON.parse(saved) : {
+    const defaults = {
       EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
-      EMA15_15_15_15_30: true, CLOUD: true, SIGNALS: true,
-      EMA50: true, EMA100: true,
+      EMA15_15_15_15_30: true, CLOUD: true,
       "1012_OPEN_CLOSE": true
+    };
+    const saved = localStorage.getItem('chartVisibility');
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+  });
+
+  const [themeColors, setThemeColors] = useState(() => {
+    const saved = localStorage.getItem('themeColors');
+    return saved ? JSON.parse(saved) : {
+      bullish: '#3b82f6',
+      bearish: '#ef4444'
     };
   });
 
+  // Inject CSS variables for real-time updates across the app
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--bullish-color', themeColors.bullish);
+    root.style.setProperty('--bearish-color', themeColors.bearish);
+    // Add semi-transparent versions for shading
+    root.style.setProperty('--bullish-color-alpha', themeColors.bullish + '66'); // 0.4 alpha
+    root.style.setProperty('--bearish-color-alpha', themeColors.bearish + '66'); // 0.4 alpha
+    localStorage.setItem('themeColors', JSON.stringify(themeColors));
+  }, [themeColors]);
+
   const fetchTrackedSymbols = () => {
-    axios.get(`${API_BASE}/api/symbols`)
+    axios.get(`${API_BASE}/api/matrix`)
       .then(res => {
-        // Show popup ONLY ONCE per page load using the ref
+        // Show popup ONLY ONCE per page load
         if (!hasShownReadyPopup.current) {
           hasShownReadyPopup.current = true;
           setBackendReady(true);
@@ -63,62 +83,45 @@ function App() {
         }
         setIsOffline(false);
 
-        const symbolsData = res.data;
-        setTrackedSymbols(Object.keys(symbolsData));
+        const matrixData = res.data;
+        const newTrackedSymbols = Object.keys(matrixData);
 
-        const prices = {};
-        for (const sym in symbolsData) {
-          const state = symbolsData[sym];
-          const currentCandles = state.currentCandles || {};
-          const candle = currentCandles['1min'] || currentCandles['3min'] || currentCandles['5min'] || currentCandles['15min'];
-
-          const stTrendByTf = {};
-          const emaBiasByTf = {};
-          for (const tf of ['1min', '3min', '5min', '15min']) {
-            const indicators = (state.indicatorValues && state.indicatorValues[tf]) || {};
-            const candleRef = (state.currentCandles && state.currentCandles[tf]) || {};
-
-            // SuperTrend Component
-            if (indicators['ST_TREND'] !== undefined) {
-              stTrendByTf[tf] = indicators['ST_TREND'];
-            } else if (candleRef.stTrend !== undefined) {
-              stTrendByTf[tf] = candleRef.stTrend;
-            }
-
-            // EMA Bias Component (Comparison: ema15 > ema15_5)
-            const e15 = indicators['EMA15'] !== undefined ? indicators['EMA15'] : candleRef.ema15;
-            const e15_5 = indicators['EMA15_5'] !== undefined ? indicators['EMA15_5'] : candleRef.ema15_5;
-
-            if (e15 && e15_5) {
-              emaBiasByTf[tf] = e15 > e15_5 ? 1 : -1;
-            } else {
-              emaBiasByTf[tf] = 0;
-            }
+        // Only update trackedSymbols if the list has changed to avoid unnecessary re-renders
+        setTrackedSymbols(prev => {
+          if (prev.length !== newTrackedSymbols.length || prev.some((s, i) => s !== newTrackedSymbols[i])) {
+            return newTrackedSymbols;
           }
+          return prev;
+        });
 
-          if (candle) {
-            prices[sym] = {
-              price: candle.close,
-              isGreen: candle.close >= candle.open,
-              stTrendByTf,
-              emaBiasByTf,
-              lastFlipTimes: state.lastFlipTimes || {}
-            };
+        // The backend now provides exactly what the matrix needs
+        setSymbolPrices(prev => {
+          // Check if anything actually changed before updating state
+          // (Simple optimization to skip state update if data is identical)
+          const hasChanged = Object.keys(matrixData).some(sym => {
+            const prevSym = prev[sym] || {};
+            const nextSym = matrixData[sym];
+            return prevSym.price !== nextSym.price ||
+              JSON.stringify(prevSym.stTrendByTf) !== JSON.stringify(nextSym.stTrendByTf);
+          });
+
+          if (hasChanged) {
+            return { ...prev, ...matrixData };
           }
-        }
-        setSymbolPrices(prev => ({ ...prev, ...prices }));
+          return prev;
+        });
       })
       .catch(err => {
-        console.error("Error fetching symbols", err);
+        console.error("Error fetching matrix", err);
         setIsOffline(true);
-        // Removing setBackendReady(false) means the popup will ONLY show once
-        // per browser tab session, even if the server restarts.
       });
   };
 
   useEffect(() => {
     fetchTrackedSymbols();
-    const interval = setInterval(fetchTrackedSymbols, 2000);
+    const interval = setInterval(() => {
+      fetchTrackedSymbols();
+    }, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -205,6 +208,7 @@ function App() {
                 onMaximize={() => setMaximizedTf(null)}
                 isMaximized={true}
                 onPriceUpdate={handlePriceUpdate}
+                themeColors={themeColors}
               />
             </div>
           ) : (
@@ -222,6 +226,7 @@ function App() {
                     onMaximize={() => setMaximizedTf(tf)}
                     isMaximized={false}
                     onPriceUpdate={handlePriceUpdate}
+                    themeColors={themeColors}
                   />
                 </div>
               ))}
@@ -229,6 +234,8 @@ function App() {
           )}
         </main>
       </div>
+
+      <BreadthWidget />
 
       {showManage && (
         <ManageSymbols
@@ -243,6 +250,8 @@ function App() {
         <ChartConfig
           visibility={visibility}
           setVisibility={setVisibility}
+          themeColors={themeColors}
+          setThemeColors={setThemeColors}
           onClose={() => setShowConfig(false)}
         />
       )}

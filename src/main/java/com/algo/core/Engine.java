@@ -1,6 +1,5 @@
 package com.algo.core;
 
-import com.algo.core.MarketUtils;
 import com.algo.data.TokenManager;
 import com.algo.data.RedisClient;
 import com.algo.data.TimescaleRepository;
@@ -17,11 +16,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletableFuture;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * The central brain of the application.
  * Receives ticks and updates all SymbolStates.
  */
 public class Engine {
+    private static final Logger logger = LoggerFactory.getLogger(Engine.class);
     private final Map<String, SymbolState> symbolStates = new ConcurrentHashMap<>();
     private final TokenManager tokenManager;
     private final RedisClient redisClient;
@@ -41,7 +44,7 @@ public class Engine {
         this.broadcaster = broadcaster;
         this.indicatorConfig = indicatorConfig;
 
-        System.out.println("Engine: Using " + indicatorConfig);
+        logger.info("Engine: Using {}", indicatorConfig);
 
         // Initialize state for all tracked symbols
         for (String symbol : tokenManager.getAllSymbols()) {
@@ -55,7 +58,7 @@ public class Engine {
     public void registerSymbol(String symbol) {
         if (!symbolStates.containsKey(symbol)) {
             symbolStates.put(symbol, new SymbolState(symbol, this::onCandleComplete, indicatorConfig));
-            System.out.println("Engine: Registered " + symbol);
+            logger.info("Engine: Registered {}", symbol);
         }
     }
 
@@ -64,7 +67,7 @@ public class Engine {
      */
     public void unregisterSymbol(String symbol) {
         symbolStates.remove(symbol);
-        System.out.println("Engine: Unregistered " + symbol);
+        logger.info("Engine: Unregistered {}", symbol);
     }
 
     /**
@@ -80,10 +83,10 @@ public class Engine {
             try {
                 if (symbol != null) {
                     timescaleRepository.saveCandles(Collections.singletonList(completedCandle), symbol, timeframe);
-                    System.out.println("Live sync: Saved 1 complete candle for " + symbol + " (" + timeframe + ")");
+                    logger.debug("Live sync: Saved 1 complete candle for {} ({})", symbol, timeframe);
                 }
             } catch (Exception e) {
-                System.err.println("Error async saving continuous candle: " + e.getMessage());
+                logger.error("Error async saving continuous candle: {}", e.getMessage());
             }
         });
     }
@@ -147,17 +150,16 @@ public class Engine {
         if (timescaleRepository == null)
             return;
 
-        System.out.println("Engine: Flushing active final candles to TimescaleDB...");
+        logger.info("Engine: Flushing active final candles to TimescaleDB...");
         for (SymbolState state : symbolStates.values()) {
             Map<String, List<Candle>> activeData = state.getActiveCandles();
             for (String tf : activeData.keySet()) {
                 List<Candle> candles = activeData.get(tf);
                 if (!candles.isEmpty()) {
-                    System.out.println(
-                            "  Flushing " + candles.size() + " partial/final candle(s) for " + state.getSymbol() + " ("
-                                    + tf + ")");
+                    logger.info("  Flushing {} partial/final candle(s) for {} ({})", candles.size(), state.getSymbol(),
+                            tf);
                     int saved = timescaleRepository.saveCandles(candles, state.getSymbol(), tf);
-                    System.out.println("  Saved " + saved + " candles.");
+                    logger.info("  Saved {} candles.", saved);
                 }
             }
         }

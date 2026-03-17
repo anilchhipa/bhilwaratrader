@@ -49,16 +49,10 @@ public class TimescaleRepository {
                         "ema15_15_15 DOUBLE PRECISION, " +
                         "ema15_15_15_15 DOUBLE PRECISION, " +
                         "ema15_15_15_15_30 DOUBLE PRECISION, " +
-                        "ema50 DOUBLE PRECISION, " +
-                        "ema100 DOUBLE PRECISION, " +
                         "st_ma DOUBLE PRECISION, " +
                         "st_up DOUBLE PRECISION, " +
                         "st_dn DOUBLE PRECISION, " +
                         "st_trend INTEGER, " +
-                        "macd_line DOUBLE PRECISION, " +
-                        "signal_line DOUBLE PRECISION, " +
-                        "macd_5 DOUBLE PRECISION, " +
-                        "macd_5_5 DOUBLE PRECISION, " +
                         "PRIMARY KEY (time, symbol, interval)" +
                         ")");
 
@@ -85,7 +79,19 @@ public class TimescaleRepository {
                         "PRIMARY KEY (symbol, interval)" +
                         ")");
 
-                System.out.println("TimescaleRepository: Database schema verified/initialized.");
+                // Pre-populate top 10 SENSEX heavyweight components (BSE)
+                String[] defaultSensexStocks = {
+                        "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT",
+                        "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"
+                };
+
+                for (String stock : defaultSensexStocks) {
+                    stmt.execute("INSERT INTO tracked_symbols (symbol, exchange) VALUES ('" + stock
+                            + "', 'BSE') ON CONFLICT DO NOTHING");
+                }
+
+                System.out.println(
+                        "TimescaleRepository: Database schema verified/initialized. Default SENSEX heavyweights added.");
             }
         } catch (SQLException e) {
             System.err.println("Error initializing database schema: " + e.getMessage());

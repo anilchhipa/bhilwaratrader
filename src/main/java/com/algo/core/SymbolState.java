@@ -3,11 +3,15 @@ package com.algo.core;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Manages the state (Candles & Indicators) for a single symbol across multiple
  * timeframes.
  */
 public class SymbolState {
+    private static final Logger logger = LoggerFactory.getLogger(SymbolState.class);
     private final String symbol;
     private final String[] timeframes = { "1min", "3min", "5min", "15min" };
 
@@ -74,21 +78,22 @@ public class SymbolState {
             // INSTANT SYNC: Adopt the state from the DB directly.
             // This ensures a perfectly smooth line with zero "cold start" delay.
             strategy.adoptState(bestPrimal);
-            System.out.println("SymbolState [" + symbol + " " + tf + "]: Primed strategy from DB baseline at "
-                    + bestPrimal.getTimestamp());
+            logger.info("SymbolState [{} {}]: Primed strategy from DB baseline at {}", symbol, tf,
+                    bestPrimal.getTimestamp());
 
-            // If the best primal is not the last candle, we still need to process the
-            // remaining ones
             int startIndex = historicalCandles.indexOf(bestPrimal) + 1;
             for (int i = startIndex; i < historicalCandles.size(); i++) {
-                strategy.onNewCandle(historicalCandles.get(i), 0); // 0 = Neutral/No Filter during initial history seed
+                Candle prev = i > 0 ? historicalCandles.get(i - 1) : null;
+                strategy.onNewCandle(prev, historicalCandles.get(i), 0); // 0 = Neutral/No Filter during initial history
+                                                                         // seed
             }
         } else {
             // Fallback: Slow warm-up by re-calculating everything
-            System.out.println("SymbolState [" + symbol + " " + tf
-                    + "]: No indicator baseline in DB. Re-calculating from " + historicalCandles.size() + " candles.");
-            for (Candle c : historicalCandles) {
-                strategy.onNewCandle(c, 0);
+            logger.info("SymbolState [{} {}]: No indicator baseline in DB. Re-calculating from {} candles.", symbol, tf,
+                    historicalCandles.size());
+            for (int i = 0; i < historicalCandles.size(); i++) {
+                Candle prev = i > 0 ? historicalCandles.get(i - 1) : null;
+                strategy.onNewCandle(prev, historicalCandles.get(i), 0);
             }
         }
 
@@ -132,12 +137,7 @@ public class SymbolState {
                 }
             }
 
-            // Removal of the redundant first-tick-seeding block in updateTimeframe
-            // as it's now handled by seedHistory or will be naturally set on first candle
-            // close.
-
-            current = new Candle(price, price, price, price, 0, start);
-            currentCandles.put(tf, current);
+            Candle newCandle = new Candle(price, price, price, price, 0, start);
 
             // Get the bias from the 15min "Compass" chart
             Strategy macroStrategy = strategies.get("15min");
@@ -146,7 +146,9 @@ public class SymbolState {
             int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
 
             // Update Strategy (New Candle Mode) with MTF filtering
-            strategies.get(tf).onNewCandle(current, macroBias);
+            strategies.get(tf).onNewCandle(current, newCandle, macroBias);
+            current = newCandle;
+            currentCandles.put(tf, current);
         } else {
             // Price Spike Filter: Ignore ticks that deviate more than 50% from the last
             // closed
@@ -157,8 +159,8 @@ public class SymbolState {
             if (stablePrice != null && stablePrice > 0) {
                 double deviation = Math.abs(price - stablePrice) / stablePrice;
                 if (deviation > 0.5) {
-                    System.err.println("SymbolState [" + symbol + " " + tf + "]: Ignored outlier tick " + price
-                            + " (deviation: " + (deviation * 100) + "% from stable " + stablePrice + ")");
+                    logger.error("SymbolState [{} {}]: Ignored outlier tick {} (deviation: {}% from stable {})", symbol,
+                            tf, price, (deviation * 100), stablePrice);
                     return;
                 }
             }

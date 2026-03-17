@@ -7,7 +7,7 @@ import axios from 'axios';
 import { API_BASE, WS_BASE } from '../config';
 import { formatSymbol } from '../helpers/formatSymbol';
 
-const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', isGrid = false, sharedOrderLines, onOrderLinesUpdate, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized, onPriceUpdate, hideHeader = false }) => {
+const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', isGrid = false, sharedOrderLines, onOrderLinesUpdate, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized, onPriceUpdate, hideHeader = false, themeColors }) => {
     const [interval, setTimeframe] = useState(initialInterval);
     const [data, setData] = useState([]);
     const [hoverIndex, setHoverIndex] = useState(null);
@@ -25,10 +25,8 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     const [isReplaying, setIsReplaying] = useState(false);
     const replayFullDataRef = useRef([]);
     const syncChannelRef = useRef(null);
+    const dataSymbolRef = useRef(null);
 
-    // Resize State
-    const [splitPct, setSplitPct] = useState(60); // 60% for main chart
-    const isResizing = useRef(false);
 
     // Y-Axis Scaling State
     const isScalingY = useRef(false);
@@ -39,8 +37,9 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     const isScalingX = useRef(false);
     const dragStartX = useRef(0);
     const initialZoomStateX = useRef(null);
-    // User X-Axis Zoom Persistence (prevents reset on live update)
-    const userZoomRef = useRef(null); // { start, end } or null to use default
+    // Viewport Persistence (prevents reset on live update)
+    const userZoomRef = useRef(null); // X-axis (Time) { start, end }
+    const userYAxisRangeRef = useRef(null); // Y-axis (Price) { min, max } or null
 
     // Manual Panning State (Main Chart)
     const isPanningY = useRef(false);
@@ -50,16 +49,11 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                // Clear old data immediately to prevent scaling/flicker issues when switching stocks
-                setData([]);
-                setIsReplayMode(false);
-                setReplayIndex(-1);
-                setIsReplaying(false);
-
                 setStatus({ state: 'loading', msg: `Fetching ${symbol} ${interval}...` });
                 const response = await axios.get(`${API_BASE}/api/history/${symbol}/${interval}?_t=${Date.now()}`);
                 if (response.data && response.data.length > 0) {
                     const sorted = response.data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                    dataSymbolRef.current = symbol; // Track which symbol this data belongs to
                     setData(sorted);
                     replayFullDataRef.current = sorted;
                     setStatus({ state: 'ok', msg: 'R' });
@@ -133,18 +127,26 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
     useEffect(() => {
         if (displayData.length > 0 && onPriceUpdate && !isReplayMode) {
-            const lastCandle = displayData[displayData.length - 1];
-            const ltp = lastCandle.close;
-            const isGreen = ltp >= lastCandle.open;
-            onPriceUpdate(symbol, ltp, isGreen);
+            // Only update the parent if the data we have actually belongs to the current symbol
+            if (dataSymbolRef.current === symbol) {
+                const lastCandle = displayData[displayData.length - 1];
+                if (lastCandle && lastCandle.close !== undefined) {
+                    onPriceUpdate(symbol, lastCandle.close, lastCandle.close >= lastCandle.open);
+                }
+            }
         }
     }, [displayData, symbol, onPriceUpdate, isReplayMode]);
 
 
 
-    // Reset zoom when symbol or interval changes so we always start at the latest candles
+    // Reset state & zoom when symbol or interval changes so we always start at the latest candles
     useEffect(() => {
+        setData([]);
+        setIsReplayMode(false);
+        setReplayIndex(-1);
+        setIsReplaying(false);
         userZoomRef.current = null;
+        userYAxisRangeRef.current = null;
     }, [symbol, interval]);
 
     // Candle Countdown Timer
@@ -202,6 +204,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                                 ema15_15_15_15_30: update.indicators.EMA15_15_15_15_30,
                                 stMa: update.indicators.ST_MA,
                                 stTrend: update.indicators.ST_TREND,
+                                sellerFear: update.indicators.SELLER_FEAR,
 
                             };
 
@@ -248,14 +251,10 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
 
     // Indicator Config
-    const [localVisibility, setLocalVisibility] = useState({
+    const visibility = externalVisibility || {
         EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
-        EMA15_15_15_15_30: true, CLOUD: true,
-        EMA50: true, EMA100: true
-    });
-
-    const visibility = externalVisibility || localVisibility;
-    const showMacd = false; // MACD removed
+        EMA15_15_15_15_30: true, CLOUD: true
+    };
 
 
     // ─── Order Lines State ────────────────────────────────────────────────────
@@ -307,10 +306,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         setOrderLines(prev => ({ ...prev, [key]: { ...prev[key], action: value } }));
     }, []);
 
-    const handleMouseDown = (e) => {
-        isResizing.current = true;
-        e.preventDefault();
-    };
 
     // Hover State for Axis Indicators
     const [hoveredAxis, setHoveredAxis] = useState(null); // 'y_main', 'y_macd', 'x', or null
@@ -365,7 +360,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         }
 
         // Check if hovering over an order line
-        if (!isResizing.current && !isScalingY.current && !isScalingX.current) {
+        if (!isScalingY.current && !isScalingX.current) {
             const echarts = echartRef.current?.getEchartsInstance();
             if (echarts) {
                 let hoveringLine = false;
@@ -392,14 +387,17 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
             if (echarts && initialPriceRange.current) {
                 const { min, max } = initialPriceRange.current;
                 const priceRange = max - min;
-                const topGridHeight = rect.height * (splitPct / 100);
+                const topGridHeight = rect.height * 0.9;
 
                 // Convert pixels to price: displacement = deltaY * (priceRange / gridHeight)
                 const priceDelta = (deltaY / topGridHeight) * priceRange;
 
+                const newMin = min + priceDelta;
+                const newMax = max + priceDelta;
                 echarts.setOption({
-                    yAxis: [{ min: min + priceDelta, max: max + priceDelta }]
+                    yAxis: [{ min: newMin, max: newMax }]
                 });
+                userYAxisRangeRef.current = { min: newMin, max: newMax };
                 echarts.getZr().setCursorStyle('grabbing');
                 return;
             }
@@ -417,9 +415,12 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 const center = (min + max) / 2;
                 const halfRange = ((max - min) / 2) * scaleFactor;
 
+                const newMin = center - halfRange;
+                const newMax = center + halfRange;
                 echarts.setOption({
-                    yAxis: [{ min: center - halfRange, max: center + halfRange }]
+                    yAxis: [{ min: newMin, max: newMax }]
                 });
+                userYAxisRangeRef.current = { min: newMin, max: newMax };
             }
         }
 
@@ -453,7 +454,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     };
 
     mouseHandlersRef.current.up = () => {
-        isResizing.current = false;
         isScalingY.current = false;
         isScalingX.current = false;
         isPanningY.current = false;
@@ -518,7 +518,14 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     }, []);
 
     const option = useMemo(() => {
-        if (displayData.length === 0) return {};
+        if (displayData.length === 0) {
+            return {
+                backgroundColor: '#131722',
+                xAxis: { show: false },
+                yAxis: { show: false },
+                series: []
+            };
+        }
 
         const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const timestamps = displayData.map(c => {
@@ -531,18 +538,23 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         });
         const ohlc = displayData.map(c => [c.open, c.close, c.low, c.high]);
 
-        const dayStartLines = [];
-        for (let i = 1; i < displayData.length; i++) {
-            const datePrev = new Date(displayData[i - 1].timestamp).getDate();
+        const dayMarkers = [];
+        for (let i = 0; i < displayData.length; i++) {
             const dateCurr = new Date(displayData[i].timestamp).getDate();
-            if (datePrev !== dateCurr) {
-                dayStartLines.push({
+            const datePrev = i > 0 ? new Date(displayData[i - 1].timestamp).getDate() : null;
+            if (i === 0 || (datePrev !== null && datePrev !== dateCurr)) {
+                dayMarkers.push({
                     xAxis: i,
-                    lineStyle: { color: 'rgba(255, 255, 255, 0.2)', width: 1, type: 'dashed' },
-                    label: { show: false }
+                    y: '94%', // Position at the very bottom of the grid
+                    symbol: 'rect',
+                    symbolSize: [18, 14],
+                    itemStyle: { color: '#3b82f6', borderRadius: 2 },
+                    label: { show: true, formatter: 'D', color: '#fff', fontSize: 10, fontWeight: 'bold' },
+                    emphasis: { disabled: true }
                 });
             }
         }
+
 
         // Add 'Right Offset' buffer (whitespace for future candles)
         const bufferSize = 50;
@@ -592,9 +604,14 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     axisLabel: {
                         color: '#d1d4dc',
                         fontSize: 10,
-                        formatter: (val) => val  // already 'DD Mon HH:MM'
+                        formatter: (val) => {
+                            if (!val || val === "") return "";
+                            // Just show time HH:mm
+                            const parts = val.split(' ');
+                            return parts.length >= 3 ? parts[2] : val;
+                        }
                     },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(43, 43, 67, 0.4)' } }
+                    splitLine: { show: false }
                 }
             ],
 
@@ -602,16 +619,18 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 {
                     scale: true,
                     position: 'right',
+                    min: userYAxisRangeRef.current ? userYAxisRangeRef.current.min : null,
+                    max: userYAxisRangeRef.current ? userYAxisRangeRef.current.max : null,
                     axisLine: { show: false },
-                    axisLabel: { color: '#64748b', fontSize: 10, formatter: v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0) },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(255, 255, 255, 0.03)' } }
+                    axisLabel: { color: '#d1d4dc', fontSize: 10, formatter: v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0) },
+                    splitLine: { show: false }
                 }
             ],
             dataZoom: [
                 // X-Axis Zoom (Time) - Default Mouse Wheel
                 {
                     type: 'inside',
-                    xAxisIndex: showMacd ? [0, 1] : [0],
+                    xAxisIndex: [0],
                     filterMode: 'filter',
                     orient: 'horizontal',
                     zoomOnMouseWheel: true,
@@ -642,32 +661,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     markPoint: {
                         symbol: 'arrow',
                         symbolSize: 10,
-                        data: visibility.SIGNALS ? (() => {
-                            const pts = [];
-                            for (let i = 1; i < displayData.length; i++) {
-                                const prev = displayData[i - 1];
-                                const curr = displayData[i];
-                                if (prev.stTrend === -1 && curr.stTrend === 1) {
-                                    pts.push({
-                                        name: 'BUY',
-                                        coord: [i, curr.low],
-                                        value: 'B',
-                                        itemStyle: { color: '#22c55e' },
-                                        label: { show: true, position: 'bottom', distance: 5, color: '#22c55e', fontSize: 10, fontWeight: 'bold' }
-                                    });
-                                } else if (prev.stTrend === 1 && curr.stTrend === -1) {
-                                    pts.push({
-                                        name: 'SELL',
-                                        coord: [i, curr.high],
-                                        value: 'S',
-                                        itemStyle: { color: '#ef4444' },
-                                        symbolRotate: 180,
-                                        label: { show: true, position: 'top', distance: 5, color: '#ef4444', fontSize: 10, fontWeight: 'bold' }
-                                    });
-                                }
-                            }
-                            return pts;
-                        })() : []
+                        data: dayMarkers
                     },
                     markLine: {
                         silent: true,
@@ -676,7 +670,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         lineStyle: { width: 1.5, type: 'solid' },
                         label: { show: true, position: 'insideEndTop', fontSize: 11, fontWeight: 'bold', padding: [2, 4] },
                         data: [
-                            ...dayStartLines,
                             ...Object.entries(orderLines)
                                 .filter(([, v]) => v.visible && v.price !== '' && !isNaN(parseFloat(v.price)))
                                 .map(([, v]) => ({
@@ -751,7 +744,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     lineStyle: { opacity: 0 },
                     symbol: 'none',
                     stack: 'uptrend',
-                    areaStyle: { color: 'rgba(60, 120, 255, 0.4)', opacity: 1 },
+                    areaStyle: { color: themeColors?.bullish ? (themeColors.bullish + '66') : 'rgba(60, 120, 255, 0.4)', opacity: 1 },
                     silent: true
                 },
                 // Downtrend: Base = close (lower), Cloud = offset to stMa (positive)
@@ -773,7 +766,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     lineStyle: { opacity: 0 },
                     symbol: 'none',
                     stack: 'downtrend',
-                    areaStyle: { color: 'rgba(255, 0, 0, 0.4)', opacity: 1 },
+                    areaStyle: { color: themeColors?.bearish ? (themeColors.bearish + '66') : 'rgba(255, 0, 0, 0.4)', opacity: 1 },
                     silent: true
                 },
                 // Cascaded EMA lines
@@ -783,14 +776,12 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 { name: 'EMA15_15_15', type: 'line', data: visibility.EMA15_15_15 ? displayData.map(c => c.ema15_15_15) : null, itemStyle: { color: '#4caf50' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA15_15_15_15', type: 'line', data: visibility.EMA15_15_15_15 ? displayData.map(c => c.ema15_15_15_15) : null, itemStyle: { color: '#ffeb3b' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
                 { name: 'EMA15_15_15_15_30', type: 'line', data: visibility.EMA15_15_15_15_30 ? displayData.map(c => c.ema15_15_15_15_30) : null, itemStyle: { color: '#00bcd4' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1 } },
-                { name: 'EMA50', type: 'line', data: visibility.EMA50 ? displayData.map(c => c.ema50) : null, itemStyle: { color: '#ff9800' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1.5 } },
-                { name: 'EMA100', type: 'line', data: visibility.EMA100 ? displayData.map(c => c.ema100) : null, itemStyle: { color: '#9c27b0' }, showSymbol: false, emphasis: { scale: false }, lineStyle: { width: 1.5 } },
 
 
 
             ]
         };
-    }, [displayData, symbol, visibility, interval, splitPct, orderLines]);
+    }, [displayData, symbol, visibility, interval, orderLines]);
 
     return (
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: isGrid ? '5px' : '10px', position: 'relative' }}>
@@ -995,23 +986,17 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 onMouseMove={(e) => {
                     // Start with basic hover detection if not dragging
                     if (!containerRef.current) return;
-                    if (isScalingX.current || isScalingY.current || isResizing.current) return;
+                    if (isScalingX.current || isScalingY.current) return;
 
                     const rect = containerRef.current.getBoundingClientRect();
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
 
-                    const topGridHeight = rect.height * (splitPct / 100);
-                    const bottomGridTop = rect.height * ((splitPct + 4) / 100);
+                    const topGridHeight = rect.height * 0.9;
 
                     // Main Y-Axis Hover
                     if (x > rect.width - 55 && y < topGridHeight) {
                         setHoveredAxis('y_main');
-                        echartRef.current?.getEchartsInstance()?.getZr().setCursorStyle('ns-resize');
-                    }
-                    // MACD Y-Axis Hover
-                    else if (showMacd && x > rect.width - 55 && y > bottomGridTop && y < rect.height - 30) {
-                        setHoveredAxis('y_macd');
                         echartRef.current?.getEchartsInstance()?.getZr().setCursorStyle('ns-resize');
                     }
                     // X-Axis Hover
@@ -1089,8 +1074,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
                     // Check if click is in the right axis area (approx > width - 50px)
                     // And also within the top grid (Main Chart) area to avoid confusion or specific targeting
-                    // Top grid height is splitPct.
-                    const topGridHeight = rect.height * (splitPct / 100);
+                    const topGridHeight = rect.height * 0.9;
 
                     if (x > rect.width - 55 && y < topGridHeight) {
                         isScalingY.current = true;
@@ -1115,27 +1099,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
                     }
 
-                    // Check if click is in the MACD Y-axis area (Bottom Grid Right Axis)
-                    const bottomGridTop = rect.height * ((splitPct + 4) / 100);
-                    if (showMacd && x > rect.width - 55 && y > bottomGridTop && y < rect.height - 30) {
-                        dragStartY.current = e.clientY;
-                        const echarts = echartRef.current?.getEchartsInstance();
-                        if (echarts) {
-                            const opt = echarts.getOption();
-                            // Get current MACD yAxis (index 1) min/max.
-                            let yMin = opt?.yAxis?.[1]?.min;
-                            let yMax = opt?.yAxis?.[1]?.max;
-                            if (yMin == null || yMax == null || typeof yMin === 'string' || typeof yMax === 'string') {
-                                // Compute from visible data range for index 1
-                                const visibleModel = echarts.getModel().getComponent('yAxis', 1);
-                                const extent = visibleModel?.axis?.scale?.getExtent?.();
-                                yMin = extent ? extent[0] : 0;
-                                yMax = extent ? extent[1] : 100;
-                            }
-                            initialZoomState_MACD.current = { min: yMin, max: yMax };
-                        }
-                        e.preventDefault();
-                    }
 
                     // Check if click is in the bottom X-axis area (Bottom 30px)
                     if (y > rect.height - 30) {
@@ -1153,7 +1116,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     }
 
                     // ─── Handle Manual Vertical Panning ──────────────────────────────
-                    // If no other interaction was triggered, and we are in the main grid
                     if (!isScalingY.current && !isScalingX.current && !draggingLine.current && !placingLine.current && y < topGridHeight && x < rect.width - 55) {
                         isPanningY.current = true;
                         panStartY.current = e.clientY;
@@ -1322,34 +1284,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 })}
 
 
-                {/* Resizable Handle Overlay */}
-                {showMacd && (
-                    <div
-                        onMouseDown={handleMouseDown}
-                        style={{
-                            position: 'absolute',
-                            top: `${splitPct}%`,
-                            left: '0',
-                            right: '0',
-                            height: '4%', // Match the gap roughly
-                            cursor: 'row-resize',
-                            zIndex: 20,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                        }}
-                        title="Drag to resize panel"
-                    >
-                        <div style={{
-                            width: '40px',
-                            height: '4px',
-                            background: 'rgba(255,255,255,0.2)',
-                            borderRadius: '2px',
-                            pointerEvents: 'none',
-                            border: '1px solid rgba(0,0,0,0.5)'
-                        }} />
-                    </div>
-                )}
 
                 <ReactECharts
                     key={`${symbol}-${interval}`}
@@ -1375,8 +1309,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                             }
                         },
                         'dataZoom': (event) => {
-                            forceUpdate();
-                            // Persist the user's zoom position so live updates don't reset it
+                            // Persist the user's zoom position immediately
                             const echarts = echartRef.current?.getEchartsInstance();
                             if (echarts) {
                                 const opt = echarts.getOption();
@@ -1384,6 +1317,13 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                                     userZoomRef.current = {
                                         start: opt.dataZoom[0].start,
                                         end: opt.dataZoom[0].end
+                                    };
+                                }
+                                // Also capture Y-axis if it was changed via dataZoom (index 1)
+                                if (opt?.yAxis?.[0]?.min !== undefined && opt?.yAxis?.[0]?.max !== undefined) {
+                                    userYAxisRangeRef.current = {
+                                        min: opt.yAxis[0].min,
+                                        max: opt.yAxis[0].max
                                     };
                                 }
                             }
@@ -1395,7 +1335,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         echartRef.current?.getEchartsInstance().getZr().on('mousemove', () => { }); // Trigger for axisPointer
                         echartRef.current?.getEchartsInstance().getZr().on('globalout', () => setHoverIndex(null));
                     }}
-                    notMerge={false}
+                    notMerge={true}
                     lazyUpdate={true}
                 />
             </div>

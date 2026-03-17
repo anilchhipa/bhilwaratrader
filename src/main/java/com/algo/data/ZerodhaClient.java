@@ -8,6 +8,7 @@ import com.zerodhatech.models.User;
 import com.zerodhatech.models.HistoricalData;
 import com.zerodhatech.models.OrderParams;
 import com.zerodhatech.models.Order;
+import com.zerodhatech.models.Position;
 import com.zerodhatech.kiteconnect.utils.Constants;
 import dev.samstevens.totp.code.CodeGenerator;
 import dev.samstevens.totp.code.DefaultCodeGenerator;
@@ -19,7 +20,11 @@ import java.time.ZoneId;
 import java.io.IOException;
 import java.util.Date;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class ZerodhaClient {
+    private static final Logger logger = LoggerFactory.getLogger(ZerodhaClient.class);
     private KiteConnect kiteConnect;
     private String userId;
     private String password;
@@ -40,7 +45,7 @@ public class ZerodhaClient {
     }
 
     public boolean login() {
-        System.out.println("ZerodhaClient: Starting Playwright headless browser login for " + userId);
+        logger.info("ZerodhaClient: Starting Playwright headless browser login for {}", userId);
 
         // Generate TOTP first
         String totpCode;
@@ -50,7 +55,7 @@ public class ZerodhaClient {
             long counter = Math.floorDiv(timeProvider.getTime(), 30);
             totpCode = codeGenerator.generate(totpSecret.trim().replaceAll("\\s", ""), counter);
         } catch (Exception e) {
-            System.err.println("ZerodhaClient: TOTP Generation Failed: " + e.getMessage());
+            logger.error("ZerodhaClient: TOTP Generation Failed: {}", e.getMessage());
             return false;
         }
 
@@ -81,15 +86,15 @@ public class ZerodhaClient {
                         if (amp != -1)
                             token = token.substring(0, amp);
                         capturedToken[0] = token;
-                        System.out.println("ZerodhaClient: Captured request_token from redirect!");
+                        logger.info("ZerodhaClient: Captured request_token from redirect!");
                     }
                 });
 
                 // Step 1: Navigate to Kite Connect login page
                 String loginUrl = "https://kite.trade/connect/login?api_key=" + apiKey + "&v=3";
-                System.out.println("ZerodhaClient: Navigating to " + loginUrl);
+                logger.info("ZerodhaClient: Navigating to {}", loginUrl);
                 page.navigate(loginUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.NETWORKIDLE));
-                System.out.println("ZerodhaClient: Current URL: " + page.url());
+                logger.debug("ZerodhaClient: Current URL: {}", page.url());
 
                 // Take screenshot to diagnose if needed
                 page.screenshot(new Page.ScreenshotOptions().setPath(java.nio.file.Paths.get("/tmp/kite_step1.png")));
@@ -100,7 +105,7 @@ public class ZerodhaClient {
                 page.locator("input#password").fill(password);
                 page.locator("button[type='submit']").click();
 
-                System.out.println("ZerodhaClient: Submitted credentials, waiting for TOTP/2FA page...");
+                logger.info("ZerodhaClient: Submitted credentials, waiting for TOTP/2FA page...");
                 // Wait for any password-like field that is NOT the password field (TOTP pin)
                 // Zerodha uses type="number" for TOTP with placeholder '6-digit code'
                 // Try multiple possible selectors
@@ -118,7 +123,7 @@ public class ZerodhaClient {
                     try {
                         page.waitForSelector(sel, new Page.WaitForSelectorOptions().setTimeout(5000));
                         totpSelector = sel;
-                        System.out.println("ZerodhaClient: Found TOTP input with selector: " + sel);
+                        logger.debug("ZerodhaClient: Found TOTP input with selector: {}", sel);
                         break;
                     } catch (Exception ex) {
                         // try next selector
@@ -127,19 +132,18 @@ public class ZerodhaClient {
 
                 // Take screenshot of current state after credential submit
                 page.screenshot(new Page.ScreenshotOptions().setPath(java.nio.file.Paths.get("/tmp/kite_step2.png")));
-                System.out
-                        .println("ZerodhaClient: Screenshot saved to /tmp/kite_step2.png, current URL: " + page.url());
+                logger.debug("ZerodhaClient: Screenshot saved to /tmp/kite_step2.png, current URL: {}", page.url());
 
                 if (totpSelector == null) {
                     // Dump page content for debugging
-                    System.err.println("ZerodhaClient: TOTP selector not found. Page title: " + page.title());
-                    System.err.println("ZerodhaClient: All inputs on page: " + page.evaluate(
+                    logger.error("ZerodhaClient: TOTP selector not found. Page title: {}", page.title());
+                    logger.debug("ZerodhaClient: All inputs on page: {}", page.evaluate(
                             "Array.from(document.querySelectorAll('input')).map(i => i.id + '|' + i.type + '|' + i.placeholder + '|' + i.name).join(', ')"));
                     return false;
                 }
 
                 // Step 3: Fill in TOTP
-                System.out.println("ZerodhaClient: Entering TOTP: " + totpCode);
+                logger.info("ZerodhaClient: Entering TOTP: {}", totpCode);
                 page.locator(totpSelector).fill(totpCode);
                 // Small wait to allow auto-submission (Zerodha auto-submits after 6 digits)
                 try {
@@ -155,7 +159,7 @@ public class ZerodhaClient {
                         /* button may not exist or already submitted */ }
                 }
 
-                System.out.println("ZerodhaClient: TOTP submitted. Current URL: " + page.url());
+                logger.debug("ZerodhaClient: TOTP submitted. Current URL: {}", page.url());
 
                 // Wait a bit for the redirect to happen and token to be captured
                 try {
@@ -165,11 +169,11 @@ public class ZerodhaClient {
 
                 // Check if we already have the token (captured from the redirect event)
                 if (capturedToken[0] != null && !capturedToken[0].isEmpty()) {
-                    System.out.println("ZerodhaClient: Token already captured, skipping authorize step!");
+                    logger.info("ZerodhaClient: Token already captured, skipping authorize step!");
                 } else {
                     // Step 4: Look for the authorize button (for first-time or explicit
                     // authorization)
-                    System.out.println("ZerodhaClient: Looking for authorize button...");
+                    logger.info("ZerodhaClient: Looking for authorize button...");
                     String authorizeSelector = null;
                     String[] possibleAuthSelectors = {
                             "button.button-blue",
@@ -181,7 +185,7 @@ public class ZerodhaClient {
                         try {
                             page.waitForSelector(sel, new Page.WaitForSelectorOptions().setTimeout(8000));
                             authorizeSelector = sel;
-                            System.out.println("ZerodhaClient: Found authorize btn: " + sel);
+                            logger.debug("ZerodhaClient: Found authorize btn: {}", sel);
                             break;
                         } catch (Exception ex) {
                             // try next
@@ -190,39 +194,39 @@ public class ZerodhaClient {
 
                     page.screenshot(
                             new Page.ScreenshotOptions().setPath(java.nio.file.Paths.get("/tmp/kite_step3.png")));
-                    System.out.println("ZerodhaClient: step3 URL: " + page.url());
+                    logger.debug("ZerodhaClient: step3 URL: {}", page.url());
 
                     if (page.url().contains("request_token=")) {
-                        System.out.println("ZerodhaClient: request_token in URL after TOTP (no auth step needed)!");
+                        logger.info("ZerodhaClient: request_token in URL after TOTP (no auth step needed)!");
                     } else if (authorizeSelector != null) {
                         String btnText = (String) page
                                 .evaluate("sel => document.querySelector(sel)?.textContent.trim()", authorizeSelector);
-                        System.out.println("ZerodhaClient: Authorize page detected. Clicking '" + btnText
-                                + "' button (selector: " + authorizeSelector + ")...");
+                        logger.info("ZerodhaClient: Authorize page detected. Clicking '{}' button (selector: {})...",
+                                btnText, authorizeSelector);
 
                         // Force click and also try submitting the form directly as fallback
                         try {
                             page.locator(authorizeSelector).first()
                                     .click(new Locator.ClickOptions().setForce(true).setTimeout(5000));
                         } catch (Exception clickEx) {
-                            System.err.println("ZerodhaClient: Primary click failed, trying JS click/submit: "
-                                    + clickEx.getMessage());
+                            logger.warn("ZerodhaClient: Primary click failed, trying JS click/submit: {}",
+                                    clickEx.getMessage());
                         }
                         page.evaluate(
                                 "sel => { const el = document.querySelector(sel); if(el) el.click(); else document.querySelector('form')?.submit(); }",
                                 authorizeSelector);
 
-                        System.out.println("ZerodhaClient: Clicked authorize. Waiting for redirect...");
+                        logger.info("ZerodhaClient: Clicked authorize. Waiting for redirect...");
                         try {
                             Thread.sleep(8000);
                         } catch (Exception ignored) {
                         }
                         page.screenshot(
                                 new Page.ScreenshotOptions().setPath(java.nio.file.Paths.get("/tmp/kite_step4.png")));
-                        System.out.println("ZerodhaClient: Post-click URL: " + page.url());
+                        logger.debug("ZerodhaClient: Post-click URL: {}", page.url());
                     } else {
-                        System.err.println("ZerodhaClient: No authorize button found. Page Title: " + page.title());
-                        System.err.println("ZerodhaClient: All buttons: " + page.evaluate(
+                        logger.warn("ZerodhaClient: No authorize button found. Page Title: {}", page.title());
+                        logger.debug("ZerodhaClient: All buttons: {}", page.evaluate(
                                 "Array.from(document.querySelectorAll('button, a.button')).map(b => b.textContent.trim() + '(' + b.className + ')').join(', ')"));
                     }
 
@@ -233,18 +237,18 @@ public class ZerodhaClient {
                     page.waitForURL(url -> url.contains("request_token="),
                             new Page.WaitForURLOptions().setTimeout(25000));
                 } catch (Exception ex) {
-                    System.out.println("ZerodhaClient: waitForURL timed out after 25s. Final URL: " + page.url());
+                    logger.warn("ZerodhaClient: waitForURL timed out after 25s. Final URL: {}", page.url());
                     if (page.url().contains("kite.zerodha.com")) {
-                        System.err.println(
+                        logger.error(
                                 "ZerodhaClient: Still on Zerodha domain. Login likely failed or stuck at Authorize.");
-                        System.err.println("ZerodhaClient: Page text sample: "
-                                + page.evaluate("document.body.innerText.substring(0, 500)"));
+                        logger.debug("ZerodhaClient: Page text sample: {}",
+                                page.evaluate("document.body.innerText.substring(0, 500)"));
                     }
                 }
 
                 // Also check current URL
                 String finalUrl = page.url();
-                System.out.println("ZerodhaClient: Final URL: " + finalUrl);
+                logger.info("ZerodhaClient: Final URL: {}", finalUrl);
 
                 if (finalUrl.contains("request_token=")) {
                     int idx = finalUrl.indexOf("request_token=");
@@ -256,22 +260,22 @@ public class ZerodhaClient {
                 }
 
                 if (capturedToken[0] == null || capturedToken[0].isEmpty()) {
-                    System.err.println("ZerodhaClient: No request_token captured. Final URL: " + finalUrl);
+                    logger.error("ZerodhaClient: No request_token captured. Final URL: {}", finalUrl);
                     return false;
                 }
 
                 // Step 6: Exchange request_token for access_token
-                System.out.println("ZerodhaClient: Exchanging request_token for access_token...");
+                logger.info("ZerodhaClient: Exchanging request_token for access_token...");
                 User user = kiteConnect.generateSession(capturedToken[0], apiSecret);
                 this.accessToken = user.accessToken;
                 kiteConnect.setAccessToken(accessToken);
                 kiteConnect.setPublicToken(user.publicToken);
 
-                System.out.println("ZerodhaClient: Playwright Login Successful! Session created.");
+                logger.info("ZerodhaClient: Playwright Login Successful! Session created.");
                 return true;
             }
         } catch (Throwable e) {
-            System.err.println("ZerodhaClient: Playwright login error: " + e.getMessage());
+            logger.error("ZerodhaClient: Playwright login error: {}", e.getMessage());
             e.printStackTrace();
             return false;
         }
@@ -282,13 +286,13 @@ public class ZerodhaClient {
     public java.util.List<com.zerodhatech.models.Instrument> getAllInstruments() {
         if (instrumentCache == null && kiteConnect != null) {
             try {
-                System.out.println("ZerodhaClient: Initializing full instrument cache...");
+                logger.info("ZerodhaClient: Initializing full instrument cache...");
                 instrumentCache = kiteConnect.getInstruments();
-                System.out.println("ZerodhaClient: Cached " + instrumentCache.size() + " instruments.");
+                logger.info("ZerodhaClient: Cached {} instruments.", instrumentCache.size());
             } catch (KiteException | IOException e) {
-                System.err.println("ZerodhaClient: Failed to fetch all instruments: " + e.getMessage());
+                logger.error("ZerodhaClient: Failed to fetch all instruments: {}", e.getMessage());
             } catch (Exception e) {
-                System.err.println("ZerodhaClient: Unexpected error fetching instruments: " + e.getMessage());
+                logger.error("ZerodhaClient: Unexpected error fetching instruments: {}", e.getMessage());
             }
         }
         return instrumentCache;
@@ -379,8 +383,8 @@ public class ZerodhaClient {
      * @param tokenManager the TokenManager whose symbols need token resolution
      */
     public void resolveTokens(TokenManager tokenManager) {
-        System.out.println("ZerodhaClient: Resolving instrument tokens for " + tokenManager.getAllSymbols().size()
-                + " symbols...");
+        logger.info("ZerodhaClient: Resolving instrument tokens for {} symbols...",
+                tokenManager.getAllSymbols().size());
 
         // Group symbols by their exchange to minimize API calls (one call per exchange)
         java.util.Map<String, java.util.List<String>> byExchange = new java.util.HashMap<>();
@@ -395,30 +399,28 @@ public class ZerodhaClient {
             java.util.Set<String> symbolSet = new java.util.HashSet<>(symbols);
 
             try {
-                System.out.println("ZerodhaClient: Fetching instrument list for exchange: " + exchange);
+                logger.info("ZerodhaClient: Fetching instrument list for exchange: {}", exchange);
                 java.util.List<com.zerodhatech.models.Instrument> instruments = kiteConnect.getInstruments(exchange);
-                System.out.println("ZerodhaClient: Got " + instruments.size() + " instruments from " + exchange);
+                logger.info("ZerodhaClient: Got {} instruments from {}", instruments.size(), exchange);
 
                 for (com.zerodhatech.models.Instrument inst : instruments) {
                     if (symbolSet.contains(inst.tradingsymbol)) {
                         String token = String.valueOf(inst.instrument_token);
                         tokenManager.updateToken(inst.tradingsymbol, token);
-                        System.out.println("ZerodhaClient: Resolved " + inst.tradingsymbol
-                                + " -> token=" + token
-                                + " (exchange=" + inst.exchange + ", type=" + inst.instrument_type
-                                + ", expiry=" + inst.expiry + ")");
+                        logger.info("ZerodhaClient: Resolved {} -> token={} (exchange={}, type={}, expiry={})",
+                                inst.tradingsymbol, token, inst.exchange, inst.instrument_type, inst.expiry);
                         symbolSet.remove(inst.tradingsymbol);
                     }
                 }
 
                 if (!symbolSet.isEmpty()) {
-                    System.err.println("ZerodhaClient: WARNING - could not resolve tokens for: " + symbolSet
-                            + ". Check if trading symbols are correct and contracts are active.");
+                    logger.warn(
+                            "ZerodhaClient: WARNING - could not resolve tokens for: {}. Check if trading symbols are correct and contracts are active.",
+                            symbolSet);
                 }
 
             } catch (com.zerodhatech.kiteconnect.kitehttp.exceptions.KiteException | Exception e) {
-                System.err
-                        .println("ZerodhaClient: Failed to fetch instruments for " + exchange + ": " + e.getMessage());
+                logger.error("ZerodhaClient: Failed to fetch instruments for {}: {}", exchange, e.getMessage());
             }
         }
     }
@@ -437,11 +439,11 @@ public class ZerodhaClient {
     }
 
     public java.util.List<com.algo.core.Candle> fetchHistory(String instrumentToken, String interval, String exchange) {
-        int days = 5; // Default for 1min, 3min
+        int days = 4; // Default for 1min, 3min
         if (interval.equals("5minute"))
-            days = 10;
+            days = 8;
         else if (interval.equals("15minute"))
-            days = 30;
+            days = 20;
         return fetchHistory(instrumentToken, interval, exchange, days);
     }
 
@@ -470,7 +472,7 @@ public class ZerodhaClient {
                 Date fromDate = Date.from(currentFrom.atZone(ZoneId.systemDefault()).toInstant());
                 Date toDate = Date.from(currentTo.atZone(ZoneId.systemDefault()).toInstant());
 
-                System.out.println("Fetching History for " + instrumentToken + " (" + interval + ")");
+                logger.info("Fetching History for {} ({})", instrumentToken, interval);
 
                 checkRateLimit();
 
@@ -487,10 +489,10 @@ public class ZerodhaClient {
                             history.add(new com.algo.core.Candle(d.open, d.high, d.low, d.close, time));
                         }
                     } else {
-                        System.out.println("No data returned for " + instrumentToken + " in chunk.");
+                        logger.warn("No data returned for {} in chunk.", instrumentToken);
                     }
                 } catch (KiteException | org.json.JSONException e) {
-                    System.err.println("API call failed for " + instrumentToken + ": " + e.getMessage());
+                    logger.error("API call failed for {}: {}", instrumentToken, e.getMessage());
                 }
 
                 currentFrom = currentTo;
@@ -501,7 +503,7 @@ public class ZerodhaClient {
             history.sort((c1, c2) -> c1.getTimestamp().compareTo(c2.getTimestamp()));
 
         } catch (Exception e) {
-            System.err.println("Error fetching history for " + instrumentToken + ": " + e.getMessage());
+            logger.error("Error fetching history for {}: {}", instrumentToken, e.getMessage());
         }
 
         return history;
@@ -536,32 +538,30 @@ public class ZerodhaClient {
                 orderParams.product = Constants.PRODUCT_MIS;
             }
 
-            System.out
-                    .println("Placing " + action + " LIMIT order for " + symbol + " at " + price + " qty " + quantity);
+            logger.info("Placing {} LIMIT order for {} at {} qty {}", action, symbol, price, quantity);
 
             // Automatically switch to AMO if market is closed
             String variety = Constants.VARIETY_REGULAR;
             if (com.algo.core.MarketUtils.isPostMarket() || com.algo.core.MarketUtils.isPreMarket()) {
                 variety = Constants.VARIETY_AMO;
-                System.out.println("Market is CLOSED. Using AMO (After Market Order) variety.");
+                logger.info("Market is CLOSED. Using AMO (After Market Order) variety.");
             }
 
             checkRateLimit();
             Order order = kiteConnect.placeOrder(orderParams, variety);
 
             if (order != null && order.orderId != null && !order.orderId.isEmpty()) {
-                System.out.println("Order Placed Successfully. Order ID: " + order.orderId);
+                logger.info("Order Placed Successfully. Order ID: {}", order.orderId);
                 return order.orderId;
             }
 
         } catch (KiteException e) {
-            System.err.println(
-                    "KiteException while placing limit order (" + symbol + "): " + e.message + " | Code: " + e.code);
+            logger.error("KiteException while placing limit order ({}): {} | Code: {}", symbol, e.message, e.code);
             if (e.message != null && e.message.contains("Variety")) {
-                System.err.println("Note: Zerodha variety error. Using 'regular' by default.");
+                logger.warn("Note: Zerodha variety error. Using 'regular' by default.");
             }
         } catch (Exception e) {
-            System.err.println("Exception while placing limit order for " + symbol + ": " + e.getMessage());
+            logger.error("Exception while placing limit order for {}: {}", symbol, e.getMessage());
             e.printStackTrace();
         }
         return null;
@@ -575,31 +575,46 @@ public class ZerodhaClient {
             orderParams.orderType = Constants.ORDER_TYPE_LIMIT;
             orderParams.price = price;
 
-            System.out.println("Modifying " + action + " LIMIT order " + orderId + " for " + symbol + " to " + price
-                    + " qty " + quantity);
+            logger.info("Modifying {} LIMIT order {} for {} to {} qty {}", action, orderId, symbol, price, quantity);
 
             // Automatically switch to AMO if market is closed
             String variety = Constants.VARIETY_REGULAR;
             if (com.algo.core.MarketUtils.isPostMarket() || com.algo.core.MarketUtils.isPreMarket()) {
                 variety = Constants.VARIETY_AMO;
-                System.out.println("Market is CLOSED. Modifying order using AMO variety.");
+                logger.info("Market is CLOSED. Modifying order using AMO variety.");
             }
 
             checkRateLimit();
             Order order = kiteConnect.modifyOrder(orderId, orderParams, variety);
 
             if (order != null && order.orderId != null && !order.orderId.isEmpty()) {
-                System.out.println("Order Modified Successfully. Order ID: " + order.orderId);
+                logger.info("Order Modified Successfully. Order ID: {}", order.orderId);
                 return order.orderId;
             }
 
         } catch (KiteException e) {
-            System.err.println("KiteException while modifying order: " + e.message);
+            logger.error("KiteException while modifying order: {}", e.message);
             e.printStackTrace();
             return null;
         } catch (Exception e) {
-            System.err.println("Exception while modifying limit order: " + e.getMessage());
+            logger.error("Exception while modifying limit order: {}", e.getMessage());
         }
         return null;
+    }
+
+    public synchronized java.util.List<com.zerodhatech.models.Position> getPositions() {
+        try {
+            if (kiteConnect != null && accessToken != null) {
+                checkRateLimit();
+                java.util.Map<String, java.util.List<Position>> positionsData = kiteConnect.getPositions();
+                java.util.List<Position> netPositions = positionsData.get("net");
+                return netPositions != null ? netPositions : new java.util.ArrayList<>();
+            }
+        } catch (KiteException | IOException e) {
+            logger.error("ZerodhaClient: Failed to fetch positions: {}", e.getMessage());
+        } catch (Exception e) {
+            logger.error("ZerodhaClient: Error in getPositions: {}", e.getMessage());
+        }
+        return new java.util.ArrayList<>();
     }
 }

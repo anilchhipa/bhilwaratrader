@@ -1,6 +1,6 @@
 import React from 'react';
 
-const ChartConfig = ({ visibility, setVisibility, onClose }) => {
+const ChartConfig = ({ visibility, setVisibility, themeColors, setThemeColors, onClose }) => {
     const sections = [
         {
             title: "Analysis Helpers",
@@ -21,13 +21,6 @@ const ChartConfig = ({ visibility, setVisibility, onClose }) => {
                 { key: 'EMA15_15_15_15_30', label: 'EMA 15/30 (Red)' },
             ]
         },
-        {
-            title: "EMA Indicators (Standard)",
-            items: [
-                { key: 'EMA50', label: 'EMA 50 (Orange)' },
-                { key: 'EMA100', label: 'EMA 100 (Purple)' },
-            ]
-        },
 
     ];
 
@@ -39,6 +32,10 @@ const ChartConfig = ({ visibility, setVisibility, onClose }) => {
         });
     };
 
+    const handleColorChange = (key, value) => {
+        setThemeColors(prev => ({ ...prev, [key]: value }));
+    };
+
     return (
         <div className="manage-symbols-modal">
             <div className="modal-content" style={{ width: '600px', height: 'auto', maxHeight: '85vh' }}>
@@ -48,6 +45,32 @@ const ChartConfig = ({ visibility, setVisibility, onClose }) => {
                 </div>
                 <div className="manage-body">
                     <div className="categories-container" style={{ gap: '16px' }}>
+
+                        {/* Theme Colors Section */}
+                        <div className="category-group">
+                            <label>Theme Colors</label>
+                            <div style={{ display: 'flex', gap: '24px', padding: '10px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Bullish Color:</span>
+                                    <input
+                                        type="color"
+                                        value={themeColors.bullish}
+                                        onChange={(e) => handleColorChange('bullish', e.target.value)}
+                                        style={{ width: '40px', height: '30px', border: 'none', background: 'transparent', cursor: 'pointer' }}
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <span style={{ fontSize: '13px', color: '#94a3b8' }}>Bearish Color:</span>
+                                    <input
+                                        type="color"
+                                        value={themeColors.bearish}
+                                        onChange={(e) => handleColorChange('bearish', e.target.value)}
+                                        style={{ width: '40px', height: '30px', border: 'none', background: 'transparent', cursor: 'pointer' }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
                         {sections.map(section => (
                             <div key={section.title} className="category-group">
                                 <label>{section.title}</label>

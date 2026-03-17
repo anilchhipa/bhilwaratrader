@@ -111,11 +111,13 @@ public class SuperTrendedMA {
         double currentAtr = 0;
         if (trHistory.size() + (isNewCandle ? 1 : 0) >= atrPeriod) {
             double sum = 0;
-            // if we are adding a new candle, we take atrPeriod-1 elements from history plus
-            // this one.
-            // if we are live, we take atrPeriod-1 elements from history plus this one.
-            int start = Math.max(0, trHistory.size() - atrPeriod + (isNewCandle ? 1 : 1));
-            for (int i = start; i < trHistory.size(); i++) {
+            // Correctly sum exactly atrPeriod - 1 historical items.
+            // If new candle: trHistory has only closed candles.
+            // If live: trHistory includes the previous version of this same candle at the
+            // end.
+            int start = Math.max(0, trHistory.size() - atrPeriod + (isNewCandle ? 1 : 0));
+            int end = isNewCandle ? trHistory.size() : trHistory.size() - 1;
+            for (int i = start; i < end; i++) {
                 sum += trHistory.get(i);
             }
             sum += tr;
@@ -131,7 +133,10 @@ public class SuperTrendedMA {
             double up = currentEma - multiplier * currentAtr;
             double dn = currentEma + multiplier * currentAtr;
 
-            if (srcHistory.size() > 0) {
+            if (srcHistory.size() > 0 && lastEma > 0) {
+                // Ratchet logic: Ensure the levels only move in the direction of the trend
+                // We use lastClose and lastUp/lastDn (the finalized baselines) to prevent
+                // live-tick jitter
                 up = (lastClose > lastUp) ? Math.max(up, lastUp) : up;
                 dn = (lastClose < lastDn) ? Math.min(dn, lastDn) : dn;
 

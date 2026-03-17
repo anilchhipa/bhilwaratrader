@@ -78,25 +78,25 @@ public class Strategy {
         }
     }
 
-    public synchronized void onNewCandle(Candle candle, int macroBias) { // macroBias retained for API compatibility
-        // 1. Commit the PREVIOUS candle's final live values to the stable baseline
-        // BEFORE we start calculating the new candle.
+    public synchronized void onNewCandle(Candle finishedCandle, Candle newCandle, int macroBias) {
+
+        // 2. Commit the PREVIOUS candle's final live values to the stable baseline
         updateSnapshots();
         if (stma != null)
             stma.commit();
 
-        // 2. Calculate the first tick of the NEW candle
-        updateIndicators(candle.getClose(), false);
+        // 3. Calculate the first tick of the NEW candle
+        updateIndicators(newCandle.getLow(), false);
         if (stma != null)
-            stma.update(candle);
+            stma.update(newCandle);
 
-        populateCandleIndicators(candle);
+        populateCandleIndicators(newCandle);
     }
 
     public synchronized void updateLastCandle(Candle candle) {
         // Always calculate live updates from the STABLE baseline (updateLast = true)
         // so that intra-candle volatility doesn't permanently skew the EMAs
-        updateIndicators(candle.getClose(), true);
+        updateIndicators(candle.getLow(), true);
         if (stma != null)
             stma.updateLive(candle);
         populateCandleIndicators(candle);
@@ -125,6 +125,7 @@ public class Strategy {
             if (!trendHistory.isEmpty())
                 candle.setStTrend(trendHistory.get(trendHistory.size() - 1));
         }
+
     }
 
     /**
@@ -184,6 +185,7 @@ public class Strategy {
             addToHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
 
         }
+
     }
 
     private void updateSnapshots() {

@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.http.ResponseEntity;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
@@ -26,6 +29,8 @@ import java.time.LocalDateTime;
 @RequestMapping("/api")
 @org.springframework.web.bind.annotation.CrossOrigin(origins = "*")
 public class TradingController {
+
+    private static final Logger logger = LoggerFactory.getLogger(TradingController.class);
 
     @Autowired
     private Engine engine;
@@ -59,6 +64,111 @@ public class TradingController {
     @GetMapping("/symbols")
     public Map<String, SymbolState> getAllSymbols() {
         return engine.getSymbolStates();
+    }
+
+    @GetMapping("/matrix")
+    public Map<String, Object> getMatrixState() {
+        Map<String, Object> result = new java.util.HashMap<>();
+        for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
+            String sym = entry.getKey();
+            SymbolState state = entry.getValue();
+
+            Map<String, Object> symData = new java.util.HashMap<>();
+            Map<String, Candle> currentCandles = state.getCurrentCandles();
+
+            // Get absolute latest price from any timeframe
+            Candle latest = currentCandles.get("1min");
+            if (latest == null)
+                latest = currentCandles.get("3min");
+            if (latest == null)
+                latest = currentCandles.get("5min");
+            if (latest == null)
+                latest = currentCandles.get("15min");
+
+            if (latest != null) {
+                symData.put("price", latest.getClose());
+                symData.put("isGreen", latest.getClose() >= latest.getOpen());
+            }
+
+            // Optimization: Backend pre-calculates the matrix values
+            Map<String, Integer> stTrendByTf = new java.util.HashMap<>();
+            Map<String, Integer> emaBiasByTf = new java.util.HashMap<>();
+
+            for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                Candle c = currentCandles.get(tf);
+                if (c != null) {
+                    stTrendByTf.put(tf, c.getStTrend());
+
+                    Double e15 = c.getEma15();
+                    Double e15_5 = c.getEma15_5();
+                    if (e15 != null && e15_5 != null) {
+                        emaBiasByTf.put(tf, e15 > e15_5 ? 1 : -1);
+                    } else {
+                        emaBiasByTf.put(tf, 0);
+                    }
+                }
+            }
+
+            symData.put("stTrendByTf", stTrendByTf);
+            symData.put("emaBiasByTf", emaBiasByTf);
+            symData.put("lastFlipTimes", state.getLastFlipTimes());
+
+            result.put(sym, symData);
+        }
+        return result;
+    }
+
+    @GetMapping("/breadth")
+    public Map<String, Object> getMarketBreadth() {
+        String[] timeframes = { "1min", "3min", "5min", "15min" };
+        Map<String, Object> result = new java.util.HashMap<>();
+
+        for (String tf : timeframes) {
+            int stUp = 0, stDown = 0, emaUp = 0, emaDown = 0, total = 0;
+
+            java.util.Set<String> top10Sensex = new java.util.HashSet<>(java.util.Arrays.asList(
+                    "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT",
+                    "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"));
+
+            for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
+                if (!top10Sensex.contains(entry.getKey())) {
+                    continue; // Skip symbols not in the top 10 Sensex list
+                }
+
+                Map<String, Candle> candles = entry.getValue().getCurrentCandles();
+                Candle c = candles.get(tf);
+                if (c == null)
+                    continue;
+                total++;
+
+                // SuperTrend direction
+                Integer trend = c.getStTrend();
+                if (trend != null && trend == 1)
+                    stUp++;
+                else if (trend != null && trend == -1)
+                    stDown++;
+
+                // EMA bias (ema15 vs ema15_5)
+                Double e15 = c.getEma15();
+                Double e15_5 = c.getEma15_5();
+                if (e15 != null && e15_5 != null) {
+                    if (e15 > e15_5)
+                        emaUp++;
+                    else
+                        emaDown++;
+                }
+            }
+
+            Map<String, Object> tfData = new java.util.HashMap<>();
+            tfData.put("stUp", stUp);
+            tfData.put("stDown", stDown);
+            tfData.put("emaUp", emaUp);
+            tfData.put("emaDown", emaDown);
+            tfData.put("total", total);
+            result.put(tf, tfData);
+        }
+
+        return result;
     }
 
     @GetMapping("/state/{symbol}")
@@ -101,25 +211,27 @@ public class TradingController {
                 }
 
                 if (latest.getTimestamp().isBefore(targetTime.minusMinutes(toleranceMins))) {
-                    System.out.println("Data for " + symbol + " (" + interval + ") is stale (last: "
-                            + latest.getTimestamp() + "). Syncing...");
+                    logger.info("Data for {} ({}) is stale (last: {}). Syncing...", symbol, interval,
+                            latest.getTimestamp());
                     historicalDataService.syncData(symbol, token, interval);
 
                     // Re-fetch after sync to get updated data
                     history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
                 }
 
-                // Append the current active/incomplete candle from memory so the UI has the
-                // absolute latest tick data
+                // Append the current active/incomplete candle from memory
                 appendActiveCandle(symbol, dbInterval, history);
 
-                System.out.println("Serving " + history.size() + " candles from TimescaleDB for " + symbol + " ("
-                        + interval + ")");
+                // Re-calculate indicators on the fly to ensure new logic (like Seller Fear)
+                // is applied to historical data served to the chart.
+                historicalDataService.calculateAndPopulateIndicators(history, symbol, dbInterval);
+
+                logger.debug("Serving {} candles from TimescaleDB for {} ({})", history.size(), symbol, interval);
                 return history;
             }
 
             // If database is empty, trigger data load ONLY for this interval and retry
-            System.out.println("No data in TimescaleDB for " + symbol + " (" + interval + "). Loading from API...");
+            logger.info("No data in TimescaleDB for {} ({}). Loading from API...", symbol, interval);
             historicalDataService.loadInitialData(symbol, token, interval);
 
             // Retry fetching from database
@@ -127,14 +239,12 @@ public class TradingController {
             if (history != null && !history.isEmpty()) {
                 appendActiveCandle(symbol, dbInterval, history);
 
-                System.out.println(
-                        "Loaded and serving " + history.size() + " candles for " + symbol + " (" + interval + ")");
+                logger.info("Loaded and serving {} candles for {} ({})", history.size(), symbol, interval);
                 return history;
             }
 
         } catch (Exception e) {
-            System.err.println("Error fetching history from TimescaleDB: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error fetching history from TimescaleDB: {}", e.getMessage());
         }
 
         return new ArrayList<>();
@@ -193,8 +303,8 @@ public class TradingController {
             double price = Double.parseDouble(priceStr);
             int quantity = Integer.parseInt(quantityStr);
 
-            System.out.println("API Request - Place Order: symbol=" + symbol + ", action=" + action + ", price=" + price
-                    + ", quantity=" + quantity);
+            logger.info("API Request - Place Order: symbol={}, action={}, price={}, quantity={}", symbol, action, price,
+                    quantity);
 
             String token = tokenManager.getToken(symbol);
             if (token == null) {

@@ -183,7 +183,7 @@ public class HistoricalDataService {
         }
     }
 
-    private void calculateAndPopulateIndicators(List<Candle> candles, String symbol, String timeframe) {
+    public void calculateAndPopulateIndicators(List<Candle> candles, String symbol, String timeframe) {
         if (candles == null || candles.isEmpty())
             return;
 
@@ -193,8 +193,10 @@ public class HistoricalDataService {
         if (symbol != null && timeframe != null) {
             List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 300);
             if (priorHistory != null) {
-                for (Candle c : priorHistory)
-                    strategy.onNewCandle(c, 0); // Warm up uses neutral bias
+                for (int i = 0; i < priorHistory.size(); i++) {
+                    Candle prev = i > 0 ? priorHistory.get(i - 1) : null;
+                    strategy.onNewCandle(prev, priorHistory.get(i), 0); // Warm up uses neutral bias
+                }
             }
         }
 
@@ -205,14 +207,16 @@ public class HistoricalDataService {
             List<Candle> macroCandles = repository.getLatestCandles(symbol, "15min", 1000);
             if (macroCandles != null) {
                 com.algo.core.Strategy macroPrep = new com.algo.core.Strategy(indicatorConfig);
-                for (Candle mc : macroCandles) {
-                    macroPrep.onNewCandle(mc, 0);
-                    macroBiasMap.put(mc.getTimestamp(), macroPrep.getBias());
+                for (int i = 0; i < macroCandles.size(); i++) {
+                    Candle prev = i > 0 ? macroCandles.get(i - 1) : null;
+                    macroPrep.onNewCandle(prev, macroCandles.get(i), 0);
+                    macroBiasMap.put(macroCandles.get(i).getTimestamp(), macroPrep.getBias());
                 }
             }
         }
 
-        for (Candle candle : candles) {
+        for (int i = 0; i < candles.size(); i++) {
+            Candle candle = candles.get(i);
             int bias = 0;
             if ("15min".equals(timeframe)) {
                 bias = 999;
@@ -223,7 +227,8 @@ public class HistoricalDataService {
                         .withNano(0);
                 bias = macroBiasMap.getOrDefault(macroTime, 0);
             }
-            strategy.onNewCandle(candle, bias);
+            Candle prev = i > 0 ? candles.get(i - 1) : null;
+            strategy.onNewCandle(prev, candle, bias);
         }
     }
 
