@@ -79,15 +79,24 @@ public class TimescaleRepository {
                         "PRIMARY KEY (symbol, interval)" +
                         ")");
 
-                // Pre-populate top 10 SENSEX heavyweight components (BSE)
-                String[] defaultSensexStocks = {
-                        "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT",
-                        "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"
+                // Pre-populate indices and top 10 SENSEX heavyweight components
+                String[][] defaultSymbols = {
+                        { "SENSEX", "BSE" },
+                        { "HDFCBANK", "BSE" },
+                        { "RELIANCE", "BSE" },
+                        { "ICICIBANK", "BSE" },
+                        { "INFY", "BSE" },
+                        { "LT", "BSE" },
+                        { "ITC", "BSE" },
+                        { "TCS", "BSE" },
+                        { "BHARTIARTL", "BSE" },
+                        { "AXISBANK", "BSE" },
+                        { "SBIN", "BSE" }
                 };
 
-                for (String stock : defaultSensexStocks) {
-                    stmt.execute("INSERT INTO tracked_symbols (symbol, exchange) VALUES ('" + stock
-                            + "', 'BSE') ON CONFLICT DO NOTHING");
+                for (String[] symInfo : defaultSymbols) {
+                    stmt.execute("INSERT INTO tracked_symbols (symbol, exchange) VALUES ('" + symInfo[0]
+                            + "', '" + symInfo[1] + "') ON CONFLICT DO NOTHING");
                 }
 
                 System.out.println(
@@ -174,9 +183,9 @@ public class TimescaleRepository {
                 conn.rollback();
                 throw e;
             }
-
-            // Update sync status
-            updateSyncStatus(symbol, interval);
+            // NOTE: updateSyncStatus removed from the live hot path.
+            // It runs on every candle save (hundreds of times/min) and fires
+            // an expensive MIN/MAX/COUNT(*) aggregate on the full table.
 
         } catch (SQLException e) {
             System.err.println("Error saving candles to TimescaleDB: " + e.getMessage());
@@ -257,7 +266,7 @@ public class TimescaleRepository {
             }
         }
 
-        // Reverse to get chronological order
+        // Reverse to get chronological order (oldest to newest) for charting/indicators
         List<Candle> reversed = new ArrayList<>();
         for (int i = candles.size() - 1; i >= 0; i--) {
             reversed.add(candles.get(i));

@@ -87,11 +87,8 @@ function BreadthRow({ tf, data, prevData }) {
     );
 }
 
-export default function BreadthWidget() {
-    const [breadth, setBreadth] = useState(null);
-    const [prevBreadth, setPrevBreadth] = useState(null);
+export default function BreadthWidget({ breadth, prevBreadth }) {
     const [isOpen, setIsOpen] = useState(false);
-    const prevRef = useRef(null);
 
     // Draggable position state
     const [position, setPosition] = useState(() => {
@@ -100,20 +97,6 @@ export default function BreadthWidget() {
     });
     const [isDragging, setIsDragging] = useState(false);
     const offsetRef = useRef({ x: 0, y: 0 });
-
-    useEffect(() => {
-        const fetchBreadth = () => {
-            axios.get(`${API_BASE}/api/breadth`).then(res => {
-                setPrevBreadth(prevRef.current);
-                prevRef.current = res.data;
-                setBreadth(res.data);
-            }).catch(() => { });
-        };
-
-        fetchBreadth();
-        const id = setInterval(fetchBreadth, 3000);
-        return () => clearInterval(id);
-    }, []);
 
     const sentiment = (() => {
         if (!breadth) return null;
@@ -221,7 +204,7 @@ export default function BreadthWidget() {
                                     key={tf}
                                     tf={tf}
                                     data={breadth[tf]}
-                                    prevData={prevRef.current?.[tf]}
+                                    prevData={prevBreadth?.[tf]}
                                 />
                             ))
                         )}

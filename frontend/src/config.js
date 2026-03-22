@@ -1,2 +1,3 @@
-export const API_BASE = window.location.origin.includes('localhost') ? 'http://localhost:8085' : '';
-export const WS_BASE = (window.location.origin.includes('localhost') ? 'http://localhost:8085' : window.location.origin) + '/ws-trading';
+const host = window.location.hostname;
+export const API_BASE = `http://${host}:8085`;
+export const WS_BASE = `http://${host}:8085/ws-trading`;

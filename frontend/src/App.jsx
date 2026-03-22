@@ -46,7 +46,7 @@ function App() {
     const defaults = {
       EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
       EMA15_15_15_15_30: true, CLOUD: true,
-      "1012_OPEN_CLOSE": true
+
     };
     const saved = localStorage.getItem('chartVisibility');
     return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
@@ -71,138 +71,92 @@ function App() {
     localStorage.setItem('themeColors', JSON.stringify(themeColors));
   }, [themeColors]);
 
-  const fetchTrackedSymbols = () => {
-    axios.get(`${API_BASE}/api/matrix`)
-      .then(res => {
-        // Show popup ONLY ONCE per page load
-        if (!hasShownReadyPopup.current) {
-          hasShownReadyPopup.current = true;
-          setBackendReady(true);
-          setShowReadyPopup(true);
-          setTimeout(() => setShowReadyPopup(false), 5000);
-        }
-        setIsOffline(false);
-
-        const matrixData = res.data;
-        const newTrackedSymbols = Object.keys(matrixData);
-
-        // Only update trackedSymbols if the list has changed to avoid unnecessary re-renders
-        setTrackedSymbols(prev => {
-          if (prev.length !== newTrackedSymbols.length || prev.some((s, i) => s !== newTrackedSymbols[i])) {
-            return newTrackedSymbols;
-          }
-          return prev;
-        });
-
-        // The backend now provides exactly what the matrix needs
-        setSymbolPrices(prev => {
-          // Check if anything actually changed before updating state
-          // (Simple optimization to skip state update if data is identical)
-          const hasChanged = Object.keys(matrixData).some(sym => {
-            const prevSym = prev[sym] || {};
-            const nextSym = matrixData[sym];
-            return prevSym.price !== nextSym.price ||
-              JSON.stringify(prevSym.stTrendByTf) !== JSON.stringify(nextSym.stTrendByTf);
-          });
-
-          if (hasChanged) {
-            return { ...prev, ...matrixData };
-          }
-          return prev;
-        });
-      })
-      .catch(err => {
-        console.error("Error fetching matrix", err);
-        setIsOffline(true);
-      });
-  };
+  const [breadth, setBreadth] = useState(null);
+  const [prevBreadth, setPrevBreadth] = useState(null);
 
   useEffect(() => {
-    fetchTrackedSymbols();
-    const interval = setInterval(() => {
-      fetchTrackedSymbols();
-    }, 2000);
+    const fetchAll = () => {
+      axios.get(`${API_BASE}/api/monitor/all`)
+        .then(res => {
+          const { matrix, breadth: newBreadth } = res.data;
+
+          setPrevBreadth(prev => breadth || prev);
+          setBreadth(newBreadth);
+          setIsOffline(false);
+
+          // Matrix update with flip detection
+          setSymbolPrices(prev => {
+            const hasChanged = Object.keys(matrix).some(sym => {
+              const prevSym = prev[sym] || {};
+              const nextSym = matrix[sym];
+              return prevSym.price !== nextSym.price ||
+                JSON.stringify(prevSym.stTrendByTf) !== JSON.stringify(nextSym.stTrendByTf);
+            });
+            return hasChanged ? { ...prev, ...matrix } : prev;
+          });
+
+          // Tracked symbols from matrix keys
+          const newTrackedSymbols = Object.keys(matrix);
+          setTrackedSymbols(prev => (prev.length !== newTrackedSymbols.length || prev.some((s, i) => s !== newTrackedSymbols[i])) ? newTrackedSymbols : prev);
+
+          if (!hasShownReadyPopup.current) {
+            hasShownReadyPopup.current = true;
+            setBackendReady(true);
+            setShowReadyPopup(true);
+            setTimeout(() => setShowReadyPopup(false), 5000);
+          }
+        })
+        .catch(err => {
+          console.error("Monitor poll fail", err);
+          setIsOffline(true);
+        });
+    };
+
+    fetchAll();
+    const interval = setInterval(fetchAll, 2000);
     return () => clearInterval(interval);
-  }, []);
-
-  // Shared Order Lines State keyed by symbol
-  const defaultOrderLines = {
-    limit: { price: '', visible: false, label: 'Limit', color: '#3b82f6', quantity: 100, action: 'BUY' },
-    target: { price: '', visible: false, label: 'Target', color: '#22c55e', quantity: 100, action: 'SELL' },
-    sl: { price: '', visible: false, label: 'Stop', color: '#ef4444', quantity: 100, action: 'SELL' },
-  };
-
-  const [orderLinesState, setOrderLinesState] = useState({});
-  const currentOrderLines = orderLinesState[selectedSymbol] || defaultOrderLines;
-
-  const handleOrderLinesUpdate = (updater) => {
-    setOrderLinesState(prev => {
-      const current = prev[selectedSymbol] || defaultOrderLines;
-      const nextLines = typeof updater === 'function' ? updater(current) : updater;
-      return {
-        ...prev,
-        [selectedSymbol]: nextLines
-      };
-    });
-  };
+  }, [breadth]);
 
 
   return (
     <div className="app-container">
       <div className={`main-content ${mobileSidebarOpen ? 'sidebar-open' : ''}`}>
         {mobileSidebarOpen && (
-          <div
-            className="sidebar-backdrop"
-            onClick={() => setMobileSidebarOpen(false)}
-          />
+          <div className="sidebar-backdrop" onClick={() => setMobileSidebarOpen(false)} />
         )}
-        <button
-          className="mobile-toggle-btn"
-          onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
-          aria-label="Toggle Sidebar"
-        >
+
+        <button className="mobile-toggle-btn" onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)} aria-label="Toggle Sidebar">
           {mobileSidebarOpen ? '✕' : '☰'}
         </button>
-        {/* Glass Sidebar */}
-        {/* Unified Glass Sidebar */}
+
         <aside className={`sidebar ${mobileSidebarOpen ? 'mobile-show' : ''}`}>
           <div className="sidebar-header">
-            <h3 className="outfit">Market Signals</h3>
+            <h3 className="outfit">Command Center</h3>
             <div className="header-actions">
-              <button className="icon-action-btn" onClick={() => setShowConfig(true)} title="Indicators">
-                <span>📊</span>
-              </button>
-              <button className="icon-action-btn" onClick={() => setShowManage(true)} title="Manage Symbols">
-                <span>⚙️</span>
-              </button>
+              <button className="icon-action-btn" onClick={() => setShowConfig(true)} title="Indicators">📊</button>
+              <button className="icon-action-btn" onClick={() => setShowManage(true)} title="Manage Symbols">⚙️</button>
             </div>
           </div>
 
-          <div className="symbol-list-container">
+
+          <div className="sidebar-scroll-area">
             <SignalMatrixList
               symbols={trackedSymbols}
-              onSymbolSelect={(s) => {
-                setSelectedSymbol(s);
-                setMobileSidebarOpen(false); // Close on mobile after selection
-              }}
+              onSymbolSelect={(s) => { setSelectedSymbol(s); setMobileSidebarOpen(false); }}
               selectedSymbol={selectedSymbol}
               symbolPrices={symbolPrices}
             />
           </div>
-
-
         </aside>
 
-        {/* Charts Section */}
         <main className="chart-section">
+          {/* ... Chart rendering remains same ... */}
           {maximizedTf ? (
             <div className="maximized-chart-wrapper">
               <ETradingChart
                 symbol={selectedSymbol}
                 initialInterval={maximizedTf}
                 isGrid={false}
-                sharedOrderLines={currentOrderLines}
-                onOrderLinesUpdate={handleOrderLinesUpdate}
                 externalVisibility={visibility}
                 onVisibilityUpdate={setVisibility}
                 onMaximize={() => setMaximizedTf(null)}
@@ -219,8 +173,6 @@ function App() {
                     symbol={selectedSymbol}
                     initialInterval={tf}
                     isGrid={true}
-                    sharedOrderLines={currentOrderLines}
-                    onOrderLinesUpdate={handleOrderLinesUpdate}
                     externalVisibility={visibility}
                     onVisibilityUpdate={setVisibility}
                     onMaximize={() => setMaximizedTf(tf)}
@@ -235,7 +187,7 @@ function App() {
         </main>
       </div>
 
-      <BreadthWidget />
+      <BreadthWidget breadth={breadth} prevBreadth={prevBreadth} />
 
       {showManage && (
         <ManageSymbols
@@ -255,6 +207,7 @@ function App() {
           onClose={() => setShowConfig(false)}
         />
       )}
+
     </div>
   );
 }

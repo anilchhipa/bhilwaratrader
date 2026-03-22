@@ -4,7 +4,6 @@ const Header = () => {
     return (
         <header className="header">
             <div className="logo">
-                <span className="logo-icon">⚡</span>
                 <h1>Antigravity Algo Terminal</h1>
             </div>
             <div className="user-profile">

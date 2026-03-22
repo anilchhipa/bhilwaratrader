@@ -7,7 +7,7 @@ import axios from 'axios';
 import { API_BASE, WS_BASE } from '../config';
 import { formatSymbol } from '../helpers/formatSymbol';
 
-const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', isGrid = false, sharedOrderLines, onOrderLinesUpdate, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized, onPriceUpdate, hideHeader = false, themeColors }) => {
+const ETradingChart = React.memo(({ symbol = 'SENSEX', initialInterval = '3min', isGrid = false, externalVisibility, onVisibilityUpdate, onMaximize, isMaximized, onPriceUpdate, hideHeader = false, themeColors }) => {
     const [interval, setTimeframe] = useState(initialInterval);
     const [data, setData] = useState([]);
     const [hoverIndex, setHoverIndex] = useState(null);
@@ -41,10 +41,15 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     const userZoomRef = useRef(null); // X-axis (Time) { start, end }
     const userYAxisRangeRef = useRef(null); // Y-axis (Price) { min, max } or null
 
+
+
     // Manual Panning State (Main Chart)
     const isPanningY = useRef(false);
     const panStartY = useRef(0);
     const initialPriceRange = useRef(null);
+    const isPanningX = useRef(false);
+    const panStartX = useRef(0);
+    const initialChartZoomX = useRef(null);
     // Initial Fetch
     useEffect(() => {
         const fetchData = async () => {
@@ -124,6 +129,9 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         }
         return data;
     }, [data, isReplayMode, replayIndex]);
+
+    const stSignals = [];
+
 
     useEffect(() => {
         if (displayData.length > 0 && onPriceUpdate && !isReplayMode) {
@@ -257,54 +265,9 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
     };
 
 
-    // ─── Order Lines State ────────────────────────────────────────────────────
-    // ─── Order Lines State (LIFTED to App.jsx) ────────────────────────────────
-    // Use shared state via prop aliases
-    const orderLines = sharedOrderLines || {};
-    const setOrderLines = onOrderLinesUpdate || (() => { });
 
-    const orderLinesRef = useRef(orderLines);
-    useEffect(() => { orderLinesRef.current = orderLines; }, [orderLines]);
 
-    // Drag state for order lines
-    const draggingLine = useRef(null); // { key, startY, startPrice }
-    const placingLine = useRef(null); // Key of line being placed (click-to-move-click)
-    const orderLineDragActive = useRef(false);
 
-    const toggleOrderLine = useCallback((key) => {
-        setOrderLines(prev => {
-            const line = prev[key];
-            const nextVisible = !line.visible;
-
-            // If turning ON, start placement mode
-            if (nextVisible) {
-                placingLine.current = key;
-            } else {
-                // If turning OFF, clear placement interaction if it was active
-                if (placingLine.current === key) placingLine.current = null;
-            }
-
-            let price = line.price;
-            // Seed price from last candle close on first enable if empty
-            if (nextVisible && (price === '' || price === null)) {
-                const lastCandle = data[data.length - 1];
-                price = lastCandle ? String(lastCandle.close) : '';
-            }
-            return { ...prev, [key]: { ...line, visible: nextVisible, price } };
-        });
-    }, [data]);
-
-    const setOrderPrice = useCallback((key, value) => {
-        setOrderLines(prev => ({ ...prev, [key]: { ...prev[key], price: value } }));
-    }, []);
-
-    const setOrderQuantity = useCallback((key, value) => {
-        setOrderLines(prev => ({ ...prev, [key]: { ...prev[key], quantity: value } }));
-    }, []);
-
-    const setOrderAction = useCallback((key, value) => {
-        setOrderLines(prev => ({ ...prev, [key]: { ...prev[key], action: value } }));
-    }, []);
 
 
     // Hover State for Axis Indicators
@@ -317,87 +280,55 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         const rect = containerRef.current.getBoundingClientRect();
         const y = e.clientY - rect.top;
 
-        // ─── Handle Placement (Follow Mouse) ─────────────────────────────
-        if (placingLine.current && !draggingLine.current) {
+
+
+
+        // Handle Manual Panning (Both X and Y)
+        if (isPanningY.current || isPanningX.current) {
             const echarts = echartRef.current?.getEchartsInstance();
             if (echarts) {
-                const pointInGrid = echarts.convertFromPixel({ seriesIndex: 0 }, [0, y]);
-                if (pointInGrid && pointInGrid.length === 2) {
-                    let newPrice = pointInGrid[1];
-                    newPrice = Math.round(newPrice * 20) / 20;
-                    const key = placingLine.current;
+                // Vertical Pan
+                if (isPanningY.current && initialPriceRange.current) {
+                    const deltaY = e.clientY - panStartY.current;
+                    const { min, max } = initialPriceRange.current;
+                    const priceRange = max - min;
+                    const mainChartGridHeight = rect.height * 0.9;
+                    const priceDelta = (deltaY / mainChartGridHeight) * priceRange;
+                    const newMin = min + priceDelta;
+                    const newMax = max + priceDelta;
 
-                    setOrderLines(prev => ({
-                        ...prev,
-                        [key]: { ...prev[key], price: newPrice }
-                    }));
-                    echarts.getZr().setCursorStyle('crosshair');
-                    return;
-                }
-            }
-        }
-
-        // ─── Handle Order Line Dragging ──────────────────────────────────
-        if (draggingLine.current) {
-            const echarts = echartRef.current?.getEchartsInstance();
-            if (echarts) {
-                // Convert pixel Y to price value
-                // The main chart grid is index 0. We assume lines are on the main chart.
-                const pointInGrid = echarts.convertFromPixel({ seriesIndex: 0 }, [0, y]);
-                if (pointInGrid && pointInGrid.length === 2) {
-                    let newPrice = pointInGrid[1];
-                    // Snap to 0.05
-                    newPrice = Math.round(newPrice * 20) / 20;
-                    const key = draggingLine.current.key;
-                    setOrderLines(prev => ({
-                        ...prev,
-                        [key]: { ...prev[key], price: newPrice }
-                    }));
-                    echarts.getZr().setCursorStyle('ns-resize');
-                    return; // Stop other interactions
-                }
-            }
-        }
-
-        // Check if hovering over an order line
-        if (!isScalingY.current && !isScalingX.current) {
-            const echarts = echartRef.current?.getEchartsInstance();
-            if (echarts) {
-                let hoveringLine = false;
-                const lines = orderLinesRef.current;
-                for (const [key, line] of Object.entries(lines)) {
-                    if (line.visible && line.price !== '' && !isNaN(parseFloat(line.price))) {
-                        const pixel = echarts.convertToPixel({ seriesIndex: 0 }, [0, parseFloat(line.price)]);
-                        if (pixel && Math.abs(pixel[1] - y) < 8) { // 8px tolerance
-                            hoveringLine = true;
-                            break;
-                        }
+                    if (!isNaN(newMin) && !isNaN(newMax)) {
+                        echarts.setOption({ yAxis: [{ min: newMin, max: newMax }] });
+                        userYAxisRangeRef.current = { min: newMin, max: newMax };
                     }
                 }
-                if (hoveringLine) {
-                    echarts.getZr().setCursorStyle('ns-resize');
+
+                // Horizontal Pan (using dataZoom)
+                if (isPanningX.current && initialChartZoomX.current) {
+                    const deltaX = panStartX.current - e.clientX;
+                    const gridWidth = rect.width - 55;
+                    const zoomRange = initialChartZoomX.current.end - initialChartZoomX.current.start;
+                    // deltaX / gridWidth gives the fraction of the visible range shifted
+                    const percentShift = (deltaX / gridWidth) * zoomRange;
+
+                    let newStart = initialChartZoomX.current.start + percentShift;
+                    let newEnd = initialChartZoomX.current.end + percentShift;
+
+                    // Bound to [0, 100]
+                    if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+                    if (newEnd > 100) { newStart -= (newEnd - 100); newEnd = 100; }
+
+                    if (!isNaN(newStart) && !isNaN(newEnd)) {
+                        echarts.dispatchAction({
+                            type: 'dataZoom',
+                            dataZoomIndex: 0,
+                            start: newStart,
+                            end: newEnd
+                        });
+                        userZoomRef.current = { start: newStart, end: newEnd };
+                    }
                 }
-            }
-        }
 
-        // Handle Manual Vertical Panning
-        if (isPanningY.current) {
-            const deltaY = e.clientY - panStartY.current;
-            const echarts = echartRef.current?.getEchartsInstance();
-            if (echarts && initialPriceRange.current) {
-                const { min, max } = initialPriceRange.current;
-                const priceRange = max - min;
-                const topGridHeight = rect.height * 0.9;
-
-                // Convert pixels to price: displacement = deltaY * (priceRange / gridHeight)
-                const priceDelta = (deltaY / topGridHeight) * priceRange;
-
-                const newMin = min + priceDelta;
-                const newMax = max + priceDelta;
-                echarts.setOption({
-                    yAxis: [{ min: newMin, max: newMax }]
-                });
-                userYAxisRangeRef.current = { min: newMin, max: newMax };
                 echarts.getZr().setCursorStyle('grabbing');
                 return;
             }
@@ -457,52 +388,9 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
         isScalingY.current = false;
         isScalingX.current = false;
         isPanningY.current = false;
+        isPanningX.current = false;
         initialPriceRange.current = null;
-
-        // Check for drag complete on order lines
-        if (draggingLine.current) {
-            const key = draggingLine.current.key;
-            const startPrice = draggingLine.current.startPrice;
-            const finalDraggingLine = draggingLine.current; // capture for closure
-
-            // We use setOrderLines callback to access the guaranteed latest state
-            setOrderLines(prev => {
-                const line = prev[key];
-                if (line && line.orderId) {
-                    const currentPrice = parseFloat(line.price);
-                    if (!isNaN(currentPrice) && currentPrice !== startPrice) {
-                        console.log(`Modifying order! Start: ${startPrice}, New: ${currentPrice}`);
-                        // Trigger the API call
-                        setStatus({ state: 'loading', msg: 'Modifying order...' });
-                        axios.post(`${API_BASE}/api/order/modify`, {
-                            orderId: line.orderId,
-                            symbol: symbol,
-                            action: line.action || 'BUY',
-                            price: currentPrice,
-                            quantity: line.quantity || 100
-                        }).then(res => {
-                            setStatus({ state: 'ok', msg: `Order Modified: ${res.data.orderId}` });
-                            setTimeout(() => setStatus({ state: 'ok', msg: 'R' }), 5000);
-                            // Update orderId just in case Angel returns a new one on modify
-                            setOrderLines(innerPrev => ({
-                                ...innerPrev,
-                                [key]: { ...innerPrev[key], orderId: res.data.orderId }
-                            }));
-                        }).catch(err => {
-                            console.error("Order modification failed", err);
-                            setStatus({ state: 'error', msg: 'Modify Failed' });
-                            // Revert line to previous price
-                            setOrderLines(innerPrev => ({
-                                ...innerPrev,
-                                [key]: { ...innerPrev[key], price: startPrice }
-                            }));
-                        });
-                    }
-                }
-                return prev; // don't actually change state here, just read it
-            });
-        }
-        draggingLine.current = null;
+        initialChartZoomX.current = null;
     };
 
     useEffect(() => {
@@ -663,66 +551,7 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         symbolSize: 10,
                         data: dayMarkers
                     },
-                    markLine: {
-                        silent: true,
-                        symbol: 'none',
-                        animation: false,
-                        lineStyle: { width: 1.5, type: 'solid' },
-                        label: { show: true, position: 'insideEndTop', fontSize: 11, fontWeight: 'bold', padding: [2, 4] },
-                        data: [
-                            ...Object.entries(orderLines)
-                                .filter(([, v]) => v.visible && v.price !== '' && !isNaN(parseFloat(v.price)))
-                                .map(([, v]) => ({
-                                    yAxis: parseFloat(v.price),
-                                    lineStyle: { color: v.color, width: 1 },
-                                    label: { formatter: `${v.label}: ${parseFloat(v.price).toFixed(2)}`, color: v.color, backgroundColor: 'rgba(13,13,30,0.85)', borderColor: v.color, borderWidth: 1, borderRadius: 3 }
-                                })),
-                            // LTP Line removed as per request to display on left side panel
-                            // 10:12 AM Reference Lines
-                            ...(visibility["1012_OPEN_CLOSE"] ? (() => {
-                                // Find all candles at 10:12 and pick the most recent one
-                                const occurrences = displayData.filter(c => {
-                                    const d = new Date(c.timestamp);
-                                    return d.getHours() === 10 && d.getMinutes() === 12;
-                                });
-
-                                if (occurrences.length === 0) return [];
-
-                                const targetCandle = occurrences[occurrences.length - 1];
-                                const candleDate = new Date(targetCandle.timestamp).toLocaleDateString();
-                                const todayDate = new Date().toLocaleDateString();
-
-                                // Determine if market is "Live" (Trading day and hours)
-                                const now = new Date();
-                                const day = now.getDay(); // 0 is Sunday, 6 is Saturday
-                                const timeVal = now.getHours() * 100 + now.getMinutes();
-                                const isTradingDay = day >= 1 && day <= 5;
-                                const isTradingHours = timeVal >= 915 && timeVal <= 1530;
-                                const isMarketLive = isTradingDay && isTradingHours;
-
-                                // Logic:
-                                // 1. If candle is from today -> Show it.
-                                // 2. If candle is from past day -> Only show if market is NOT live.
-                                const shouldShow = (candleDate === todayDate) || !isMarketLive;
-
-                                if (targetCandle && shouldShow) {
-                                    return [
-                                        {
-                                            yAxis: targetCandle.open,
-                                            lineStyle: { color: '#ffeb3b', width: 1, type: 'dashed' },
-                                            label: { formatter: `10:12 OPEN: ${targetCandle.open}`, color: '#ffeb3b', position: 'start' }
-                                        },
-                                        {
-                                            yAxis: targetCandle.close,
-                                            lineStyle: { color: '#ffeb3b', width: 1, type: 'dashed' },
-                                            label: { formatter: `10:12 CLOSE: ${targetCandle.close}`, color: '#ffeb3b', position: 'start' }
-                                        }
-                                    ];
-                                }
-                                return [];
-                            })() : [])
-                        ]
-                    }
+                    markLine: null
                 },
                 // Perfectly Smooth Cloud (Native Series Stacking)
                 // Uptrend: Base = stMa (lower), Cloud = offset to close (positive)
@@ -779,9 +608,10 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
 
 
 
+
             ]
         };
-    }, [displayData, symbol, visibility, interval, orderLines]);
+    }, [displayData, symbol, visibility, interval]);
 
     return (
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: isGrid ? '5px' : '10px', position: 'relative' }}>
@@ -816,49 +646,16 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         )}
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        {/* Integrated Order Line Controls */}
-                        <div style={{ display: 'flex', gap: '6px', height: '28px', alignItems: 'center' }}>
-                            {Object.entries(orderLines).map(([key, line]) => (
-                                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '28px' }}>
-                                    <button
-                                        onClick={() => toggleOrderLine(key)}
-                                        title={`Toggle ${line.label}`}
-                                        style={{
-                                            width: '14px', height: '14px', borderRadius: '3px',
-                                            border: `1.5px solid ${line.color}`,
-                                            background: line.visible ? line.color : 'transparent',
-                                            cursor: 'pointer', padding: 0, flexShrink: 0,
-                                            transition: 'all 0.2s'
-                                        }}
-                                    />
-                                    {!isGrid && <span style={{ color: line.color, fontSize: '10px', fontWeight: 700 }}>{line.label}</span>}
-                                    {isGrid && <span style={{ color: line.color, fontSize: '9px', fontWeight: 700 }}>{line.label.substring(0, 1)}</span>}
-
-                                    {line.visible && (
-                                        <input
-                                            type="number"
-                                            step="0.5"
-                                            value={line.price}
-                                            onChange={e => setOrderPrice(key, e.target.value)}
-                                            style={{
-                                                width: '42px', background: 'transparent',
-                                                border: 'none', borderBottom: `1px solid ${line.color}`,
-                                                color: '#eee', fontSize: '10px', padding: '0 2px',
-                                                height: '20px', textAlign: 'center', outline: 'none'
-                                            }}
-                                            placeholder="0.00"
-                                        />
-                                    )}
-                                </div>
-                            ))}
-                        </div>
 
 
                         <div style={{ color: status.state === 'error' ? '#ef5350' : '#26a69a', fontSize: isGrid ? '10px' : '12px', fontWeight: 'bold', height: '28px', display: 'flex', alignItems: 'center' }}>{status.msg}</div>
                         {!isGrid && <div style={{ color: '#aaa', fontSize: '11px', height: '28px', display: 'flex', alignItems: 'center' }}>{displayData.length} Bars</div>}
 
+
+                        <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.1)', margin: '0 6px' }} />
+
                         {/* Compact Replay Controls */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: isGrid ? '4px' : '10px', background: 'rgba(0,0,0,0.2)', height: '28px', padding: '0 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: isGrid ? '4px' : '10px', background: 'rgba(0,0,0,0.2)', height: '28px', padding: isGrid ? '0 4px' : '0 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
                             <button
                                 onClick={() => {
                                     if (isReplayMode) {
@@ -972,6 +769,10 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
             )}
 
 
+            {/* Automation Execution Monitor */}
+
+
+
 
             <div
                 ref={containerRef}
@@ -992,10 +793,10 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
 
-                    const topGridHeight = rect.height * 0.9;
+                    const mainChartGridHeight = rect.height * 0.9;
 
                     // Main Y-Axis Hover
-                    if (x > rect.width - 55 && y < topGridHeight) {
+                    if (x > rect.width - 55 && y < mainChartGridHeight) {
                         setHoveredAxis('y_main');
                         echartRef.current?.getEchartsInstance()?.getZr().setCursorStyle('ns-resize');
                     }
@@ -1015,82 +816,56 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 onMouseDown={(e) => {
                     if (!containerRef.current) return;
                     const rect = containerRef.current.getBoundingClientRect();
+                    const mainChartGridHeight = rect.height * 0.9;
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
+                    let yMin, yMax;
 
-                    // ─── Handle Placement Commit ──────────────────────────────────
-                    if (placingLine.current) {
-                        const committedKey = placingLine.current;
-                        placingLine.current = null;
-                        const echarts = echartRef.current?.getEchartsInstance();
-                        echarts?.getZr().setCursorStyle('default');
-                        e.preventDefault();
-
-                        // Place order API call for 'limit' line
-                        if (committedKey === 'limit') {
-                            const line = orderLinesRef.current['limit'];
-                            const committedPrice = line?.price;
-                            if (committedPrice && !isNaN(parseFloat(committedPrice))) {
-                                setStatus({ state: 'loading', msg: 'Placing order...' });
-                                axios.post(`${API_BASE}/api/order/place`, {
-                                    symbol: symbol,
-                                    action: line.action || 'BUY',
-                                    price: parseFloat(committedPrice),
-                                    quantity: line.quantity || 100
-                                }).then(res => {
-                                    setStatus({ state: 'ok', msg: `Order Placed: ${res.data.orderId}` });
-                                    setTimeout(() => setStatus({ state: 'ok', msg: 'R' }), 5000);
-
-                                    // Save the orderId in state so we can modify it later
-                                    setOrderLines(prev => ({
-                                        ...prev,
-                                        ['limit']: { ...prev['limit'], orderId: res.data.orderId }
-                                    }));
-                                }).catch(err => {
-                                    console.error("Order placement failed", err);
-                                    setStatus({ state: 'error', msg: 'Order Failed' });
-                                });
-                            }
-                        }
-
-                        return;
-                    }
-
-                    // ─── Check for Order Line Drag Start ──────────────────────────
-                    const echarts = echartRef.current?.getEchartsInstance();
-                    if (echarts) {
-                        const lines = orderLinesRef.current;
-                        for (const [key, line] of Object.entries(lines)) {
-                            if (line.visible && line.price !== '' && !isNaN(parseFloat(line.price))) {
-                                const pixel = echarts.convertToPixel({ seriesIndex: 0 }, [0, parseFloat(line.price)]);
-                                if (pixel && Math.abs(pixel[1] - y) < 8) { // 8px tolerance
-                                    draggingLine.current = { key, startY: y, startPrice: parseFloat(line.price) };
-                                    e.preventDefault();
-                                    return; // Stop here, don't trigger other interactions
-                                }
-                            }
-                        }
-                    }
 
                     // Check if click is in the right axis area (approx > width - 50px)
                     // And also within the top grid (Main Chart) area to avoid confusion or specific targeting
-                    const topGridHeight = rect.height * 0.9;
+                    // Already defined at the top of onMouseDown
 
-                    if (x > rect.width - 55 && y < topGridHeight) {
+                    if (x > rect.width - 55 && y < mainChartGridHeight) {
                         isScalingY.current = true;
                         dragStartY.current = e.clientY;
                         const echarts = echartRef.current?.getEchartsInstance();
                         if (echarts) {
                             const opt = echarts.getOption();
-                            // Get current yAxis min/max. If 'auto', compute from visible data.
-                            let yMin = opt?.yAxis?.[0]?.min;
-                            let yMax = opt?.yAxis?.[0]?.max;
-                            if (yMin == null || yMax == null || typeof yMin === 'string' || typeof yMax === 'string') {
-                                // Compute from visible data range
+
+                            // Capture Y state using coordinate conversion (RELIABLE)
+                            // Capture Y state using coordinate conversion (RELIABLE)
+                            try {
+                                const pTop = echarts.convertFromPixel({ seriesIndex: 0 }, [0, 0])[1];
+                                const pBot = echarts.convertFromPixel({ seriesIndex: 0 }, [0, mainChartGridHeight])[1];
+                                yMin = pBot;
+                                yMax = pTop;
+                            } catch (e) {
+                                // Model fallback 
                                 const visibleModel = echarts.getModel().getComponent('yAxis', 0);
                                 const extent = visibleModel?.axis?.scale?.getExtent?.();
                                 yMin = extent ? extent[0] : 0;
                                 yMax = extent ? extent[1] : 100;
+                            }
+
+                            // DATA-DRIVEN VALIDATION (Bulletproof)
+                            // If price seems stuck in 0-100 range but data shows real prices (e.g. 1000+)
+                            const lastPrice = data[data.length - 1]?.close || 0;
+                            if (lastPrice > 500 && yMax <= 150) {
+                                // Recover by looking at CURRENTLY VISIBLE data indices accurately
+                                const dzStart = opt?.dataZoom?.[0]?.start || 0;
+                                const dzEnd = opt?.dataZoom?.[0]?.end || 100;
+                                const startIdx = Math.max(0, Math.floor(data.length * dzStart / 100));
+                                const endIdx = Math.min(data.length, Math.ceil(data.length * dzEnd / 100));
+                                const visibleData = data.slice(startIdx, endIdx);
+                                if (visibleData.length > 0) {
+                                    yMin = visibleData.reduce((min, d) => Math.min(min, d.low), Infinity) * 0.99;
+                                    yMax = visibleData.reduce((max, d) => Math.max(max, d.high), -Infinity) * 1.01;
+                                }
+                            }
+
+                            if (isNaN(yMin) || isNaN(yMax) || yMin === yMax) {
+                                yMin = 0; yMax = 100;
                             }
                             initialZoomState.current = { min: yMin, max: yMax };
                         }
@@ -1115,22 +890,51 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                         e.preventDefault();
                     }
 
-                    // ─── Handle Manual Vertical Panning ──────────────────────────────
-                    if (!isScalingY.current && !isScalingX.current && !draggingLine.current && !placingLine.current && y < topGridHeight && x < rect.width - 55) {
+                    // ─── Handle Manual Panning (Both X and Y) ──────────────────────────────
+                    if (!isScalingY.current && !isScalingX.current && !draggingLine.current && !placingLine.current && y < mainChartGridHeight && x < rect.width - 55) {
                         isPanningY.current = true;
+                        isPanningX.current = true;
                         panStartY.current = e.clientY;
+                        panStartX.current = e.clientX;
                         const echarts = echartRef.current?.getEchartsInstance();
                         if (echarts) {
                             const opt = echarts.getOption();
-                            let yMin = opt?.yAxis?.[0]?.min;
-                            let yMax = opt?.yAxis?.[0]?.max;
-                            if (yMin == null || yMax == null || typeof yMin === 'string' || typeof yMax === 'string') {
+
+                            // Capture Y state using coordinate conversion (RELIABLE)
+                            try {
+                                const pTop = echarts.convertFromPixel({ seriesIndex: 0 }, [0, 0])[1];
+                                const pBot = echarts.convertFromPixel({ seriesIndex: 0 }, [0, mainChartGridHeight])[1];
+                                yMin = pBot;
+                                yMax = pTop;
+                            } catch (e) {
                                 const visibleModel = echarts.getModel().getComponent('yAxis', 0);
                                 const extent = visibleModel?.axis?.scale?.getExtent?.();
                                 yMin = extent ? extent[0] : 0;
                                 yMax = extent ? extent[1] : 100;
                             }
+
+                            // DATA-DRIVEN VALIDATION (Bulletproof)
+                            // If price seems stuck in 0-100 range but data shows real prices (e.g. 1000+)
+                            const lastPrice = data[data.length - 1]?.close || 0;
+                            if (lastPrice > 500 && yMax <= 150) {
+                                const dzStart = opt?.dataZoom?.[0]?.start || 0;
+                                const dzEnd = opt?.dataZoom?.[0]?.end || 100;
+                                const startIdx = Math.max(0, Math.floor(data.length * dzStart / 100));
+                                const endIdx = Math.min(data.length, Math.ceil(data.length * dzEnd / 100));
+                                const visibleData = data.slice(startIdx, endIdx);
+                                if (visibleData.length > 0) {
+                                    yMin = visibleData.reduce((min, d) => Math.min(min, d.low), Infinity) * 0.99;
+                                    yMax = visibleData.reduce((max, d) => Math.max(max, d.high), -Infinity) * 1.01;
+                                }
+                            }
+
                             initialPriceRange.current = { min: yMin, max: yMax };
+
+                            // Capture X state (dataZoom)
+                            if (opt?.dataZoom?.[0]) {
+                                initialChartZoomX.current = { start: opt.dataZoom[0].start, end: opt.dataZoom[0].end };
+                            }
+
                             echarts.getZr().setCursorStyle('grabbing');
                         }
                         e.preventDefault();
@@ -1186,102 +990,6 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 )}
 
 
-                {/* Order Line Control Windows */}
-                {Object.entries(orderLines).map(([key, line]) => {
-                    const echarts = echartRef.current?.getEchartsInstance();
-                    if (!line.visible || isNaN(parseFloat(line.price)) || !echarts) return null;
-
-                    const pixel = echarts.convertToPixel({ seriesIndex: 0 }, [0, parseFloat(line.price)]);
-                    if (!pixel) return null;
-
-                    // Hide window if it's off-screen vertically
-                    const rect = containerRef.current?.getBoundingClientRect();
-                    if (rect && (pixel[1] < 0 || pixel[1] > rect.height)) return null;
-
-                    return (
-                        <div key={key}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            style={{
-                                position: 'absolute',
-                                top: `${pixel[1]}px`,
-                                left: '10px',
-                                transform: 'translateY(-50%)',
-                                background: '#1e222d',
-                                border: `1px solid ${line.color}`,
-                                borderRadius: '6px',
-                                padding: '4px 6px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                zIndex: 100,
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                                pointerEvents: 'auto',
-                                transition: draggingLine.current?.key === key ? 'none' : 'top 0.1s ease-out'
-                            }}>
-                            <div style={{
-                                width: '8px', height: '8px', borderRadius: '50%',
-                                background: line.color, flexShrink: 0
-                            }} />
-
-                            <span style={{
-                                color: '#fff', fontSize: '10px', fontWeight: 'bold',
-                                minWidth: '35px', textTransform: 'uppercase'
-                            }}>{line.label}</span>
-
-                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                <input
-                                    type="number"
-                                    value={line.quantity}
-                                    onChange={(e) => setOrderQuantity(key, parseInt(e.target.value) || 0)}
-                                    onMouseDown={(e) => e.stopPropagation()}
-                                    onFocus={(e) => e.target.select()}
-                                    style={{
-                                        width: '45px', height: '22px', background: 'rgba(255,255,255,0.05)',
-                                        border: '1px solid rgba(255,255,255,0.1)',
-                                        color: '#fff', fontSize: '11px', borderRadius: '4px', padding: '0 4px',
-                                        textAlign: 'center', outline: 'none'
-                                    }}
-                                />
-                                <span style={{ position: 'absolute', right: '-10px', color: '#666', fontSize: '8px', pointerEvents: 'none' }}>Q</span>
-                            </div>
-
-                            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', padding: '2px', marginLeft: '5px' }}>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setOrderAction(key, 'BUY'); }}
-                                    title="BUY"
-                                    style={{
-                                        width: '26px', height: '20px', fontSize: '10px', border: 'none', borderRadius: '3px',
-                                        background: line.action === 'BUY' ? '#26a69a' : 'transparent',
-                                        color: line.action === 'BUY' ? '#fff' : '#888',
-                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.1s',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
-                                    }}
-                                >B</button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setOrderAction(key, 'SELL'); }}
-                                    title="SELL"
-                                    style={{
-                                        width: '26px', height: '20px', fontSize: '10px', border: 'none', borderRadius: '3px',
-                                        background: line.action === 'SELL' ? '#ef5350' : 'transparent',
-                                        color: line.action === 'SELL' ? '#fff' : '#888',
-                                        cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.1s',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
-                                    }}
-                                >S</button>
-                            </div>
-
-                            <div
-                                style={{
-                                    marginLeft: '4px', width: '20px', height: '20px',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    cursor: 'pointer', color: '#666', fontSize: '12px'
-                                }}
-                                onClick={(e) => { e.stopPropagation(); toggleOrderLine(key); }}
-                                title="Close"
-                            >✕</div>
-                        </div>
-                    );
-                })}
 
 
 
@@ -1340,30 +1048,32 @@ const ETradingChart = React.memo(({ symbol = 'NIFTY', initialInterval = '3min', 
                 />
             </div>
 
-            {!isGrid && (
-                <div style={{ display: 'flex', gap: '15px', justifyContent: 'center', background: '#1e222d', padding: '10px', borderRadius: '8px' }}>
+            {
+                !isGrid && (
+                    <div style={{ display: 'flex', gap: '15px', justifyContent: 'center', background: '#1e222d', padding: '10px', borderRadius: '8px' }}>
 
-                    {Object.keys(visibility).map(key => (
-                        <label key={key} style={{ color: '#d1d4dc', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <input
-                                type="checkbox"
-                                checked={visibility[key]}
-                                onChange={() => {
-                                    const next = { ...visibility, [key]: !visibility[key] };
-                                    if (onVisibilityUpdate) onVisibilityUpdate(next);
-                                    else setLocalVisibility(next);
-                                }}
-                            />
-                            {key.replace(/_/g, ' ')}
-                        </label>
-                    ))}
-                </div>
-            )}
+                        {Object.keys(visibility).map(key => (
+                            <label key={key} style={{ color: '#d1d4dc', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={visibility[key]}
+                                    onChange={() => {
+                                        const next = { ...visibility, [key]: !visibility[key] };
+                                        if (onVisibilityUpdate) onVisibilityUpdate(next);
+                                        else setLocalVisibility(next);
+                                    }}
+                                />
+                                {key.replace(/_/g, ' ')}
+                            </label>
+                        ))}
+                    </div>
+                )
+            }
 
             {/* Zoom Controls Removed (User preferred drag interaction) */}
 
 
-        </div>
+        </div >
     );
 });
 

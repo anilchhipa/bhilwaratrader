@@ -5,9 +5,7 @@ const ChartConfig = ({ visibility, setVisibility, themeColors, setThemeColors, o
         {
             title: "Analysis Helpers",
             items: [
-                { key: 'CLOUD', label: 'Supertrend Cloud' },
-                { key: 'SIGNALS', label: 'Buy/Sell Signals' },
-                { key: '1012_OPEN_CLOSE', label: '10:12 AM Ref Lines' }
+                { key: 'CLOUD', label: 'Supertrend Cloud' }
             ]
         },
         {

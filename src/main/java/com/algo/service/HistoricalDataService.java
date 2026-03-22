@@ -84,7 +84,15 @@ public class HistoricalDataService {
         if (existingCount < requiredCount) {
             return true;
         }
-        System.out.println("  [" + tf + "] Already has " + existingCount + " candles. Skipping initial fetch.");
+        // Even if count is sufficient, check if data is STALE (gap older than 1 day).
+        // This handles the case where the app was offline for days/weeks.
+        LocalDateTime lastCandle = repository.getLastCandleTime(symbol, tf);
+        if (lastCandle == null || lastCandle.isBefore(LocalDateTime.now().minusDays(1))) {
+            System.out.println("  [" + tf + "] Data is stale (last candle: " + lastCandle + "). Re-fetching...");
+            return true;
+        }
+        System.out.println(
+                "  [" + tf + "] Already has " + existingCount + " candles and data is fresh. Skipping initial fetch.");
         return false;
     }
 

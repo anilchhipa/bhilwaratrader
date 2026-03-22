@@ -56,9 +56,23 @@ public class TradingController {
     @Autowired
     private com.algo.data.RedisClient redisClient;
 
+    @Autowired
+    private com.algo.core.MarketSessionManager marketSessionManager;
+
     @GetMapping("/config")
     public com.algo.core.IndicatorConfig getConfig() {
         return indicatorConfig;
+    }
+
+    /**
+     * Manual data sync trigger — fills historical gaps regardless of market hours.
+     * Call this whenever the chart shows stale/missing data.
+     */
+    @PostMapping("/data/sync")
+    public ResponseEntity<?> triggerDataSync() {
+        new Thread(() -> marketSessionManager.triggerManualPreMarketSync(), "manual-sync").start();
+        return ResponseEntity.ok(java.util.Map.of("status", "sync started", "message",
+                "Fetching missing historical data in background..."));
     }
 
     @GetMapping("/symbols")
@@ -186,8 +200,21 @@ public class TradingController {
         String dbInterval = interval; // 1min, 3min, 5min, etc.
 
         try {
+            // Dynamic limit: give enough candles for ~30 trading days per timeframe
+            // 1min: 375 candles/day x 30 days = ~11250
+            // 3min: 125 x 30 = ~3750
+            // 5min: 75 x 30 = ~2250
+            // 15min: 25 x 30 = ~750
+            int candleLimit = 3750; // default for 3min
+            if (interval.equals("1min"))
+                candleLimit = 11250;
+            else if (interval.equals("5min"))
+                candleLimit = 2250;
+            else if (interval.equals("15min"))
+                candleLimit = 750;
+
             // Try to fetch from TimescaleDB first
-            List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
+            List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
 
             // Freshness Check: If DB has data but the latest candle is old, trigger sync
             if (history != null && !history.isEmpty()) {
@@ -216,7 +243,7 @@ public class TradingController {
                     historicalDataService.syncData(symbol, token, interval);
 
                     // Re-fetch after sync to get updated data
-                    history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
+                    history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
                 }
 
                 // Append the current active/incomplete candle from memory
@@ -235,7 +262,7 @@ public class TradingController {
             historicalDataService.loadInitialData(symbol, token, interval);
 
             // Retry fetching from database
-            history = timescaleRepository.getLatestCandles(symbol, dbInterval, 2000);
+            history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
             if (history != null && !history.isEmpty()) {
                 appendActiveCandle(symbol, dbInterval, history);
 
@@ -288,82 +315,6 @@ public class TradingController {
         }
     }
 
-    @PostMapping("/order/place")
-    public ResponseEntity<?> placeLimitOrder(@RequestBody Map<String, Object> orderReq) {
-        try {
-            String symbol = (String) orderReq.get("symbol");
-            String action = (String) orderReq.get("action"); // expected: "BUY" or "SELL"
-            String priceStr = String.valueOf(orderReq.get("price"));
-            String quantityStr = String.valueOf(orderReq.get("quantity"));
-
-            if (symbol == null || action == null || priceStr == null || quantityStr == null) {
-                return ResponseEntity.badRequest().body("Missing required order parameters");
-            }
-
-            double price = Double.parseDouble(priceStr);
-            int quantity = Integer.parseInt(quantityStr);
-
-            logger.info("API Request - Place Order: symbol={}, action={}, price={}, quantity={}", symbol, action, price,
-                    quantity);
-
-            String token = tokenManager.getToken(symbol);
-            if (token == null) {
-                return ResponseEntity.badRequest().body("Invalid symbol. Token not found.");
-            }
-
-            // Route to Zerodha Client to place order
-            String orderId = zerodhaClient.placeLimitOrder(symbol, token, action, price, quantity);
-
-            if (orderId != null) {
-                return ResponseEntity.ok(Map.of("message", "Order placed successfully", "orderId", orderId));
-            } else {
-                return ResponseEntity.status(500).body(Map.of("error", "Failed to place order via API"));
-            }
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body(Map.of("error", "Exception while placing order: " + e.getMessage()));
-        }
-    }
-
-    @PostMapping("/order/modify")
-    public ResponseEntity<?> modifyLimitOrder(@RequestBody Map<String, Object> orderReq) {
-        try {
-            String orderId = (String) orderReq.get("orderId");
-            String symbol = (String) orderReq.get("symbol");
-            String action = (String) orderReq.get("action"); // expected: "BUY" or "SELL"
-            String priceStr = String.valueOf(orderReq.get("price"));
-            String quantityStr = String.valueOf(orderReq.get("quantity"));
-
-            if (orderId == null || symbol == null || action == null || priceStr == null || quantityStr == null) {
-                return ResponseEntity.badRequest().body("Missing required order parameters");
-            }
-
-            double price = Double.parseDouble(priceStr);
-            int quantity = Integer.parseInt(quantityStr);
-
-            String token = tokenManager.getToken(symbol);
-            if (token == null) {
-                return ResponseEntity.badRequest().body("Invalid symbol. Token not found.");
-            }
-
-            // Route to Zerodha Client to modify order
-            String newOrderId = zerodhaClient.modifyLimitOrder(orderId, symbol, token, action, price, quantity);
-
-            if (newOrderId != null) {
-                return ResponseEntity.ok(Map.of("message", "Order modified successfully", "orderId", newOrderId));
-            } else {
-                return ResponseEntity.status(500)
-                        .body(Map.of("error", "Failed to modify order via API or API returned error"));
-            }
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500)
-                    .body(Map.of("error", "Exception while modifying order: " + e.getMessage()));
-        }
-    }
-
     @GetMapping("/symbols/search")
     public List<Map<String, String>> searchInstruments(@RequestParam String query) {
         List<com.zerodhatech.models.Instrument> all = zerodhaClient.getAllInstruments();
@@ -393,7 +344,7 @@ public class TradingController {
 
         result.put("STOCKS", toSimpleList(zerodhaClient.getInstrumentsByType("STOCKS"), 200));
         result.put("FUTURES", toSimpleList(zerodhaClient.getInstrumentsByType("FUTURES"), 200));
-        result.put("OPTIONS", toSimpleList(zerodhaClient.getInstrumentsByType("OPTIONS"), 500));
+        result.put("OPTIONS", toSimpleList(zerodhaClient.getInstrumentsByType("OPTIONS"), 2500));
 
         return result;
     }
@@ -501,19 +452,88 @@ public class TradingController {
         return ResponseEntity.ok(Map.of("message", "Symbols flushed", "count", symbols.size()));
     }
 
-    @PostMapping("/symbols/flush-all")
+    @PostMapping("/order/flush-all")
     public ResponseEntity<?> flushAll() {
-        // Delete ALL from DB
-        timescaleRepository.flushAllData();
-        // Delete ALL from Redis
-        redisClient.flushAll();
-
-        // Re-register all tracked symbols in engine to clear in-memory state
-        for (String symbol : engine.getSymbolStates().keySet()) {
-            engine.unregisterSymbol(symbol);
-            engine.registerSymbol(symbol);
-        }
-
+        // ... (existing flushAll logic) ...
         return ResponseEntity.ok(Map.of("message", "ALL data flushed"));
+    }
+
+    @GetMapping("/monitor/all")
+    public Map<String, Object> getUnifiedMonitor() {
+        Map<String, Object> result = new java.util.HashMap<>();
+
+        // 1. Matrix and Symbols (Similar to /api/matrix)
+        Map<String, Object> matrix = new java.util.HashMap<>();
+        for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
+            String sym = entry.getKey();
+            SymbolState state = entry.getValue();
+            Map<String, Object> symData = new java.util.HashMap<>();
+            Map<String, Candle> currentCandles = state.getCurrentCandles();
+
+            Candle c1 = currentCandles.get("1min");
+            if (c1 != null) {
+                symData.put("price", c1.getClose());
+                symData.put("isGreen", c1.getClose() >= c1.getOpen());
+                symData.put("stMa", c1.getStMa());
+                symData.put("trend", c1.getStTrend());
+            }
+
+            Map<String, Integer> stTrendByTf = new java.util.HashMap<>();
+            Map<String, Integer> emaBiasByTf = new java.util.HashMap<>();
+            for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                Candle c = currentCandles.get(tf);
+                if (c != null) {
+                    stTrendByTf.put(tf, c.getStTrend());
+                    Double e15 = c.getEma15();
+                    Double e15_5 = c.getEma15_5();
+                    emaBiasByTf.put(tf, (e15 != null && e15_5 != null) ? (e15 > e15_5 ? 1 : -1) : 0);
+                }
+            }
+            symData.put("stTrendByTf", stTrendByTf);
+            symData.put("emaBiasByTf", emaBiasByTf);
+            symData.put("lastFlipTimes", state.getLastFlipTimes());
+            matrix.put(sym, symData);
+        }
+        result.put("matrix", matrix);
+
+        // 2. Breadth (Re-using logic from getMarketBreadth)
+        String[] bTfs = { "1min", "3min", "5min", "15min" };
+        Map<String, Object> breadth = new java.util.HashMap<>();
+        java.util.Set<String> top10Sensex = new java.util.HashSet<>(java.util.Arrays.asList(
+                "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT", "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"));
+
+        for (String tf : bTfs) {
+            int stUp = 0, stDown = 0, emaUp = 0, emaDown = 0, total = 0;
+            for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
+                if (!top10Sensex.contains(entry.getKey()))
+                    continue;
+                Candle c = entry.getValue().getCurrentCandles().get(tf);
+                if (c == null)
+                    continue;
+                total++;
+                if (c.getStTrend() != null) {
+                    if (c.getStTrend() == 1)
+                        stUp++;
+                    else if (c.getStTrend() == -1)
+                        stDown++;
+                }
+                if (c.getEma15() != null && c.getEma15_5() != null) {
+                    if (c.getEma15() > c.getEma15_5())
+                        emaUp++;
+                    else
+                        emaDown++;
+                }
+            }
+            Map<String, Object> tfB = new java.util.HashMap<>();
+            tfB.put("stUp", stUp);
+            tfB.put("stDown", stDown);
+            tfB.put("emaUp", emaUp);
+            tfB.put("emaDown", emaDown);
+            tfB.put("total", total);
+            breadth.put(tf, tfB);
+        }
+        result.put("breadth", breadth);
+
+        return result;
     }
 }

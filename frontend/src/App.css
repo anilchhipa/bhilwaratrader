@@ -1092,18 +1092,18 @@
   .bias-box {
     height: 14px;
   }
-}
 
-.sidebar-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  z-index: 998;
-  animation: fadeIn 0.2s ease-out;
+  .sidebar-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    z-index: 998;
+    animation: fadeIn 0.2s ease-out;
+  }
 }
 
 @keyframes fadeIn {
@@ -1407,4 +1407,131 @@
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid;
+}
+
+/* Command Center Tabs */
+.sidebar-tabs {
+  display: flex;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.side-tab {
+  flex: 1;
+  padding: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.2s;
+  border-radius: 8px;
+  position: relative;
+}
+
+.side-tab.active {
+  background: var(--glass-border);
+  color: white;
+}
+
+.active-dot {
+  color: #f59e0b;
+  font-size: 8px;
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}
+
+.sidebar-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* OPS Panel */
+.ops-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ops-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 900;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.ops-global-config input {
+  width: 60px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--glass-border);
+  color: white;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.ops-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 12px;
+  transition: all 0.2s;
+}
+
+.ops-item.active {
+  background: rgba(245, 158, 11, 0.05);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.ops-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ops-sym {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+}
+
+.ops-trend {
+  font-size: 9px;
+  font-weight: 900;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.ops-trend.up {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.ops-trend.dn {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.ops-item-status {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: #94a3b8;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 8px;
+}
+
+.ops-item-status b {
+  color: white;
 }

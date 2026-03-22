@@ -5,16 +5,20 @@ import { API_BASE } from '../config';
 const ManageSymbols = ({ onClose, onUpdate }) => {
     const [categories, setCategories] = useState({ STOCKS: [], FUTURES: [], OPTIONS: [] });
     const [tracked, setTracked] = useState([]);
+    const [trackedData, setTrackedData] = useState({});
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         fetchTracked();
         fetchCategorized();
+        const poll = setInterval(fetchTracked, 2000);
+        return () => clearInterval(poll);
     }, []);
 
     const fetchTracked = async () => {
         try {
             const res = await axios.get(`${API_BASE}/api/symbols`);
+            setTrackedData(res.data);
             setTracked(Object.keys(res.data));
             if (onUpdate) onUpdate();
         } catch (err) {
@@ -65,11 +69,16 @@ const ManageSymbols = ({ onClose, onUpdate }) => {
     };
 
     const getStrike = (symbol) => {
-        // Regex for SENSEX/NIFTY weekly options: [INDEX][YY][M/MONTH][DD][STRIKE][CE/PE]
-        // SENSEX2630571200CE -> Strike 71200
-        const regex = /^([A-Z]+)(\d{2})([1-9OND])(\d{2})(\d+)([CP]E)$/;
+        // Match both Monthly (e.g. SENSEX26MAR65100CE) and Weekly (e.g. SENSEX2630571200CE)
+        const regex = /^[a-zA-Z]+\d{2}(?:[a-zA-Z]{3}|[1-9ONDond]\d{2})(\d+)[CPcp][Ee]$/;
         const match = symbol.match(regex);
-        if (match) return match[5];
+        if (match) return match[1];
+
+        // Fallback for known index strike lengths (5 digits before CE/PE)
+        const fallbackRegex = /(\d{5})[CPcp][Ee]$/;
+        const fallbackMatch = symbol.match(fallbackRegex);
+        if (fallbackMatch) return fallbackMatch[1];
+
         return symbol;
     };
 
@@ -128,12 +137,22 @@ const ManageSymbols = ({ onClose, onUpdate }) => {
         return parseInt(strike);
     };
 
+    useEffect(() => {
+        // Find SENSEX LTP from tracked data
+        const sensexState = trackedData['SENSEX'];
+        if (sensexState && sensexState.currentCandles?.['1min']) {
+            setSpotPrice(sensexState.currentCandles['1min'].close.toString());
+        }
+    }, [trackedData]);
+
     const filterOptionsBySpot = (options) => {
         if (!spotPrice || isNaN(spotPrice)) return options;
         const spot = parseFloat(spotPrice);
         const atm = Math.round(spot / 100) * 100;
-        const minStrike = atm - 500;
-        const maxStrike = atm + 500;
+
+        // Professional Option Chain: 10 ITM and 10 OTM (approx 1000 pts each way for SENSEX)
+        const minStrike = atm - 1000;
+        const maxStrike = atm + 1000;
 
         return options.filter(opt => {
             const strike = getStrikeValue(opt.symbol);
@@ -192,7 +211,7 @@ const ManageSymbols = ({ onClose, onUpdate }) => {
                     <div className="title-area">
                         <h2>Manage Symbols</h2>
                         <div className="spot-filter">
-                            <label>SENSEX SPOT</label>
+                            <label>SENSEX SPOT {trackedData['SENSEX'] ? <span className="live-badge">(Live)</span> : ""}</label>
                             <div className="spot-input-wrapper">
                                 <input
                                     type="number"

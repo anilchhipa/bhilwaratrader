@@ -329,10 +329,9 @@ public class ZerodhaClient {
                     }
                 }
             } else if (type.equalsIgnoreCase("OPTIONS")) {
-                // SENSEX Options on BFO
-                if ((inst.instrument_type.equals("CE") || inst.instrument_type.equals("PE"))
-                        && inst.exchange.equals("BFO")) {
-                    if (symbol.startsWith("SENSEX") || (name != null && name.equals("SENSEX"))) {
+                // Strictly filter for the main SENSEX index only
+                if ((inst.instrument_type.equals("CE") || inst.instrument_type.equals("PE"))) {
+                    if (inst.exchange.equals("BFO") && symbol.startsWith("SENSEX") && !symbol.startsWith("SENSEX50")) {
                         filtered.add(inst);
                     }
                 }
@@ -355,10 +354,44 @@ public class ZerodhaClient {
             }
         }
 
-        // Sort by trading symbol
-        filtered.sort((a, b) -> a.tradingsymbol.compareTo(b.tradingsymbol));
+        // Sort options by numeric strike; others (stocks/futures) by symbol
+        filtered.sort((a, b) -> {
+            if (type.equalsIgnoreCase("OPTIONS")) {
+                try {
+                    long strikeA = extractStrike(a.tradingsymbol);
+                    long strikeB = extractStrike(b.tradingsymbol);
+                    if (strikeA != strikeB) {
+                        return Long.compare(strikeA, strikeB);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            return a.tradingsymbol.compareTo(b.tradingsymbol);
+        });
 
         return filtered;
+    }
+
+    private long extractStrike(String symbol) {
+        try {
+            // First try matching standard structure: INDEX YY MONTH/MMM DD? STRIKE CE/PE
+            java.util.regex.Pattern p = java.util.regex.Pattern
+                    .compile("[A-Za-z]+\\d{2}(?:[A-Za-z]{3}|[1-9ONDond]\\d{2})(\\d+)[CPcp][Ee]$");
+            java.util.regex.Matcher m = p.matcher(symbol);
+            if (m.find()) {
+                return Long.parseLong(m.group(1));
+            }
+
+            // Fallback: match precisely 5 digits before CE/PE
+            p = java.util.regex.Pattern.compile("(\\d{5})[CPcp][Ee]$");
+            m = p.matcher(symbol);
+            if (m.find()) {
+                return Long.parseLong(m.group(1));
+            }
+            return 0;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     public KiteConnect getKiteConnect() {
@@ -509,112 +542,4 @@ public class ZerodhaClient {
         return history;
     }
 
-    public String placeLimitOrder(String symbol, String instrumentToken, String action, double price, int quantity) {
-        try {
-            OrderParams orderParams = new OrderParams();
-            orderParams.quantity = quantity;
-            orderParams.orderType = Constants.ORDER_TYPE_LIMIT;
-            orderParams.transactionType = action.equalsIgnoreCase("BUY") ? Constants.TRANSACTION_TYPE_BUY
-                    : Constants.TRANSACTION_TYPE_SELL;
-            orderParams.tradingsymbol = symbol;
-            orderParams.price = price;
-
-            if (symbol.contains("CE") || symbol.contains("PE")) {
-                if (symbol.startsWith("SENSEX") || symbol.startsWith("BANKEX") || symbol.startsWith("BSE")) {
-                    orderParams.exchange = Constants.EXCHANGE_BFO;
-                } else {
-                    orderParams.exchange = Constants.EXCHANGE_NFO;
-                }
-            } else if (symbol.startsWith("SENSEX") || symbol.startsWith("BSE")) {
-                orderParams.exchange = Constants.EXCHANGE_BSE;
-            } else {
-                orderParams.exchange = Constants.EXCHANGE_NSE;
-            }
-            orderParams.validity = Constants.VALIDITY_DAY;
-            // Use NRML for Options as MIS is often blocked for specific strikes/symbols
-            if (symbol.contains("CE") || symbol.contains("PE")) {
-                orderParams.product = Constants.PRODUCT_NRML;
-            } else {
-                orderParams.product = Constants.PRODUCT_MIS;
-            }
-
-            logger.info("Placing {} LIMIT order for {} at {} qty {}", action, symbol, price, quantity);
-
-            // Automatically switch to AMO if market is closed
-            String variety = Constants.VARIETY_REGULAR;
-            if (com.algo.core.MarketUtils.isPostMarket() || com.algo.core.MarketUtils.isPreMarket()) {
-                variety = Constants.VARIETY_AMO;
-                logger.info("Market is CLOSED. Using AMO (After Market Order) variety.");
-            }
-
-            checkRateLimit();
-            Order order = kiteConnect.placeOrder(orderParams, variety);
-
-            if (order != null && order.orderId != null && !order.orderId.isEmpty()) {
-                logger.info("Order Placed Successfully. Order ID: {}", order.orderId);
-                return order.orderId;
-            }
-
-        } catch (KiteException e) {
-            logger.error("KiteException while placing limit order ({}): {} | Code: {}", symbol, e.message, e.code);
-            if (e.message != null && e.message.contains("Variety")) {
-                logger.warn("Note: Zerodha variety error. Using 'regular' by default.");
-            }
-        } catch (Exception e) {
-            logger.error("Exception while placing limit order for {}: {}", symbol, e.getMessage());
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    public String modifyLimitOrder(String orderId, String symbol, String instrumentToken, String action, double price,
-            int quantity) {
-        try {
-            OrderParams orderParams = new OrderParams();
-            orderParams.quantity = quantity;
-            orderParams.orderType = Constants.ORDER_TYPE_LIMIT;
-            orderParams.price = price;
-
-            logger.info("Modifying {} LIMIT order {} for {} to {} qty {}", action, orderId, symbol, price, quantity);
-
-            // Automatically switch to AMO if market is closed
-            String variety = Constants.VARIETY_REGULAR;
-            if (com.algo.core.MarketUtils.isPostMarket() || com.algo.core.MarketUtils.isPreMarket()) {
-                variety = Constants.VARIETY_AMO;
-                logger.info("Market is CLOSED. Modifying order using AMO variety.");
-            }
-
-            checkRateLimit();
-            Order order = kiteConnect.modifyOrder(orderId, orderParams, variety);
-
-            if (order != null && order.orderId != null && !order.orderId.isEmpty()) {
-                logger.info("Order Modified Successfully. Order ID: {}", order.orderId);
-                return order.orderId;
-            }
-
-        } catch (KiteException e) {
-            logger.error("KiteException while modifying order: {}", e.message);
-            e.printStackTrace();
-            return null;
-        } catch (Exception e) {
-            logger.error("Exception while modifying limit order: {}", e.getMessage());
-        }
-        return null;
-    }
-
-    public synchronized java.util.List<com.zerodhatech.models.Position> getPositions() {
-        try {
-            if (kiteConnect != null && accessToken != null) {
-                checkRateLimit();
-                java.util.Map<String, java.util.List<Position>> positionsData = kiteConnect.getPositions();
-                java.util.List<Position> netPositions = positionsData.get("net");
-                return netPositions != null ? netPositions : new java.util.ArrayList<>();
-            }
-        } catch (KiteException | IOException e) {
-            logger.error("ZerodhaClient: Failed to fetch positions: {}", e.getMessage());
-        } catch (Exception e) {
-            logger.error("ZerodhaClient: Error in getPositions: {}", e.getMessage());
-        }
-        return new java.util.ArrayList<>();
-    }
 }

@@ -33,7 +33,9 @@ public class Engine {
     private final IndicatorConfig indicatorConfig;
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
-    private final ExecutorService asyncPool = Executors.newFixedThreadPool(20);
+    // Leveraging Java 21+ Virtual Threads (Project Loom) for infinite scalability
+    // and true non-blocking I/O during Redis/Postgres/WebSocket broadcasting
+    private final ExecutorService asyncPool = Executors.newVirtualThreadPerTaskExecutor();
     private final ConcurrentHashMap<String, Long> lastTickQueueTime = new ConcurrentHashMap<>();
 
     public Engine(TokenManager tokenManager, RedisClient redisClient, TimescaleRepository timescaleRepository,
@@ -77,8 +79,8 @@ public class Engine {
         if (timescaleRepository == null)
             return;
 
-        // Save the completed candle to the database asynchronously to avoid blocking
-        // the tick thread
+        // Save the completed candle to the database asynchronously via Virtual Threads
+        // preventing ForkJoinPool starvation during heavy DB I/O
         CompletableFuture.runAsync(() -> {
             try {
                 if (symbol != null) {
@@ -88,7 +90,7 @@ public class Engine {
             } catch (Exception e) {
                 logger.error("Error async saving continuous candle: {}", e.getMessage());
             }
-        });
+        }, asyncPool);
     }
 
     public void onTick(String token, double price) {

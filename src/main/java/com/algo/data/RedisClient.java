@@ -72,12 +72,21 @@ public class RedisClient {
         if (jedisPool == null)
             return;
         try (Jedis jedis = jedisPool.getResource()) {
-            // Find all keys for this symbol (OHLC, INDICATORS, HISTORY)
+            // Use non-blocking SCAN instead of dangerous blocking KEYS command
             String pattern = symbol + ":*";
-            java.util.Set<String> keys = jedis.keys(pattern);
-            if (keys != null && !keys.isEmpty()) {
-                jedis.del(keys.toArray(new String[0]));
-                System.out.println("RedisClient: Flushed " + keys.size() + " keys for " + symbol);
+            String cursor = "0";
+            java.util.List<String> allKeys = new java.util.ArrayList<>();
+            do {
+                redis.clients.jedis.params.ScanParams scanParams = new redis.clients.jedis.params.ScanParams()
+                        .match(pattern).count(100);
+                redis.clients.jedis.resps.ScanResult<String> result = jedis.scan(cursor, scanParams);
+                cursor = result.getCursor();
+                allKeys.addAll(result.getResult());
+            } while (!"0".equals(cursor));
+
+            if (!allKeys.isEmpty()) {
+                jedis.del(allKeys.toArray(new String[0]));
+                System.out.println("RedisClient: Flushed " + allKeys.size() + " keys for " + symbol);
             }
         } catch (Exception e) {
             System.err.println("Redis Flush Error: " + e.getMessage());
