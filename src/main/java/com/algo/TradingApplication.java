@@ -23,7 +23,7 @@ public class TradingApplication {
     }
 
     @Bean
-    public ZerodhaClient zerodhaClient() {
+    public ZerodhaClient zerodhaClient(IndicatorConfig indicatorConfig) {
         String userId = System.getenv("KITE_USER_ID") != null ? System.getenv("KITE_USER_ID") : "VX7625";
         String password = System.getenv("KITE_PASSWORD") != null ? System.getenv("KITE_PASSWORD") : "A1S2$#@!aaa";
         String apiKey = System.getenv("KITE_API_KEY") != null ? System.getenv("KITE_API_KEY") : "wlxn2xin3anb1eq3";
@@ -32,7 +32,7 @@ public class TradingApplication {
         String totpSecret = System.getenv("KITE_TOTP_SECRET") != null ? System.getenv("KITE_TOTP_SECRET")
                 : "NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5";
 
-        return new ZerodhaClient(userId, password, apiKey, apiSecret, totpSecret);
+        return new ZerodhaClient(userId, password, apiKey, apiSecret, totpSecret, indicatorConfig);
     }
 
     @Bean

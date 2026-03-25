@@ -458,6 +458,196 @@ public class TradingController {
         return ResponseEntity.ok(Map.of("message", "ALL data flushed"));
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACCOUNT ENDPOINTS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * GET /api/account/funds
+     * Returns available cash, used debits, and used span for equity segment.
+     * Example response: { "net": 50000.0, "available_cash": 48000.0, ... }
+     */
+    @GetMapping("/account/funds")
+    public ResponseEntity<?> getAccountFunds() {
+        try {
+            java.util.Map<String, Double> funds = zerodhaClient.getAvailableFunds();
+            return ResponseEntity.ok(funds);
+        } catch (Exception e) {
+            logger.error("Error fetching funds: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to fetch funds: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * GET /api/account/max-qty?price=1300&leverage=5
+     * Returns maximum intraday quantity you can buy at the given price.
+     * leverage defaults to 5 (Zerodha MIS standard).
+     */
+    @GetMapping("/account/max-qty")
+    public ResponseEntity<?> getMaxIntradayQty(
+            @RequestParam double price,
+            @RequestParam(defaultValue = "5") double leverage) {
+        try {
+            int maxQty = zerodhaClient.getMaxIntradayQty(price, leverage);
+            java.util.Map<String, Double> funds = zerodhaClient.getAvailableFunds();
+            double available = funds.getOrDefault("net", 0.0);
+            return ResponseEntity.ok(Map.of(
+                    "maxQty", maxQty,
+                    "available", available,
+                    "leverage", leverage,
+                    "price", price,
+                    "totalNeeded", price * maxQty / leverage));
+        } catch (Exception e) {
+            logger.error("Error calculating max qty: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/account/charges
+     * Body: { "buyPrice": 1300.0, "sellPrice": 1302.0, "qty": 200, "exchange":
+     * "NSE" }
+     * Returns itemised charge breakdown for an intraday round-trip.
+     */
+    @PostMapping("/account/charges")
+    public ResponseEntity<?> calculateCharges(@RequestBody Map<String, Object> req) {
+        try {
+            double buyPrice = ((Number) req.get("buyPrice")).doubleValue();
+            double sellPrice = ((Number) req.get("sellPrice")).doubleValue();
+            int qty = ((Number) req.get("qty")).intValue();
+            String exchange = (String) req.getOrDefault("exchange", "NSE");
+
+            java.util.Map<String, Double> charges = zerodhaClient.calculateIntradayCharges(buyPrice, sellPrice, qty,
+                    exchange);
+
+            double grossProfit = (sellPrice - buyPrice) * qty;
+            double netProfit = grossProfit - charges.get("total");
+
+            java.util.Map<String, Object> result = new java.util.LinkedHashMap<>(charges);
+            result.put("gross_profit", Math.round(grossProfit * 100.0) / 100.0);
+            result.put("net_profit", Math.round(netProfit * 100.0) / 100.0);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            logger.error("Error calculating charges: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Bad request: " + e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LIMIT ORDER ENDPOINTS (used by drag-drop line on chart)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * POST /api/order/place
+     * Body: { "symbol": "RELIANCE", "exchange": "NSE", "txnType": "BUY",
+     * "qty": 200, "price": 1300.50, "product": "MIS" }
+     * Places a new limit order and returns the Zerodha order ID.
+     */
+    @PostMapping("/order/place")
+    public ResponseEntity<?> placeOrder(@RequestBody Map<String, Object> req) {
+        try {
+            String symbol = (String) req.get("symbol");
+            String uiExchange = (String) req.get("exchange");
+            String exchange = tokenManager != null && symbol != null ? tokenManager.getExchangeType(symbol) : "NSE";
+            if (uiExchange != null && !uiExchange.equals(exchange)) {
+                logger.warn("Exchange warning for {}: Using backend map ({}) over UI provided ({})", symbol, exchange,
+                        uiExchange);
+            }
+            String txnType = (String) req.get("txnType"); // "BUY" or "SELL"
+            int qty = ((Number) req.get("qty")).intValue();
+            double price = ((Number) req.get("price")).doubleValue();
+            String product = (String) req.getOrDefault("product", "MIS");
+
+            String reqVariety = (String) req.get("variety");
+            String variety = reqVariety != null ? reqVariety
+                    : (com.algo.core.MarketUtils.isMarketOpen() ? "regular" : "amo");
+
+            if (symbol == null || txnType == null || qty <= 0 || price <= 0) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Missing required fields: symbol, txnType, qty, price"));
+            }
+
+            // Round price to nearest 0.05 (NSE/BSE tick size requirement)
+            price = Math.round(price * 20.0) / 20.0;
+
+            String orderId = zerodhaClient.placeLimitOrder(symbol, exchange, txnType, qty, price, product, variety);
+            return ResponseEntity.ok(Map.of(
+                    "orderId", orderId,
+                    "symbol", symbol,
+                    "txnType", txnType,
+                    "qty", qty,
+                    "price", price,
+                    "product", product,
+                    "status", "PLACED"));
+        } catch (Exception e) {
+            logger.error("Error placing order: {}", e.getMessage());
+            return ResponseEntity.status(500)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * PUT /api/order/modify
+     * Body: { "orderId": "240101000012345", "price": 1305.00, "qty": 200 }
+     * Modifies the price of an existing pending limit order (used when line is
+     * dragged).
+     */
+    @org.springframework.web.bind.annotation.PutMapping("/order/modify")
+    public ResponseEntity<?> modifyOrder(@RequestBody Map<String, Object> req) {
+        try {
+            String orderId = (String) req.get("orderId");
+            double newPrice = ((Number) req.get("price")).doubleValue();
+            int qty = ((Number) req.get("qty")).intValue();
+
+            if (orderId == null || newPrice <= 0 || qty <= 0) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Missing required fields: orderId, price, qty"));
+            }
+
+            // Round price to nearest 0.05
+            newPrice = Math.round(newPrice * 20.0) / 20.0;
+
+            String reqVariety = (String) req.get("variety");
+            String variety = reqVariety != null ? reqVariety
+                    : (com.algo.core.MarketUtils.isMarketOpen() ? "regular" : "amo");
+
+            String updated = zerodhaClient.modifyLimitOrder(orderId, newPrice, qty, variety);
+            return ResponseEntity.ok(Map.of(
+                    "orderId", updated,
+                    "newPrice", newPrice,
+                    "status", "MODIFIED"));
+        } catch (Exception e) {
+            logger.error("Error modifying order: {}", e.getMessage());
+            return ResponseEntity.status(500)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * DELETE /api/order/cancel/{orderId}
+     * Cancels a pending limit order (used when the order line is removed from
+     * chart).
+     */
+    @org.springframework.web.bind.annotation.DeleteMapping("/order/cancel/{orderId}")
+    public ResponseEntity<?> cancelOrder(@PathVariable String orderId) {
+        try {
+            boolean cancelled = zerodhaClient.cancelOrder(orderId);
+            if (cancelled) {
+                return ResponseEntity.ok(Map.of("orderId", orderId, "status", "CANCELLED"));
+            } else {
+                return ResponseEntity.internalServerError()
+                        .body(Map.of("error", "Cancellation failed. Order may be already filled."));
+            }
+        } catch (Exception e) {
+            logger.error("Error cancelling order: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/monitor/all")
     public Map<String, Object> getUnifiedMonitor() {
         Map<String, Object> result = new java.util.HashMap<>();

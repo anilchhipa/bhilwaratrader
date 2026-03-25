@@ -80,8 +80,10 @@ function App() {
         .then(res => {
           const { matrix, breadth: newBreadth } = res.data;
 
-          setPrevBreadth(prev => breadth || prev);
-          setBreadth(newBreadth);
+          setBreadth(prev => {
+            if (prev) setPrevBreadth(prev);
+            return newBreadth;
+          });
           setIsOffline(false);
 
           // Matrix update with flip detection
@@ -113,9 +115,9 @@ function App() {
     };
 
     fetchAll();
-    const interval = setInterval(fetchAll, 2000);
+    const interval = setInterval(fetchAll, 2000); // 2000ms strictly respected now
     return () => clearInterval(interval);
-  }, [breadth]);
+  }, []); // Empty dependency array prevents the infinite polling loop
 
 
   return (

@@ -40,6 +40,9 @@ public class IndicatorConfig {
     @Value("${indicator.supertrend.multiplier:0.5}")
     private double stMultiplier;
 
+    @Value("${trading.paper-mode:false}")
+    private boolean paperMode;
+
     // --- Getters ---
 
     public int getEmaPeriod1() {
@@ -76,6 +79,10 @@ public class IndicatorConfig {
 
     public double getStMultiplier() {
         return stMultiplier;
+    }
+
+    public boolean isPaperMode() {
+        return paperMode;
     }
 
     @Override

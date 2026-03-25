@@ -8,6 +8,8 @@ const isRecent = (timestamp) => {
 };
 
 const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelect }) => {
+    const [dismissedAlerts, setDismissedAlerts] = React.useState({});
+
     const timeframes = React.useMemo(() => [
         { key: '15min', label: '15M' },
         { key: '5min', label: '5M' },
@@ -37,7 +39,12 @@ const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelec
             const data = symbolPrices[symbol] || {};
             const stTrendByTf = data.stTrendByTf || {};
             const lastFlips = data.lastFlipTimes || {};
-            const hasRecentFlip = Object.values(lastFlips).some(ts => isRecent(ts));
+            let latestFlipTs = Math.max(0, ...Object.values(lastFlips).map(ts => ts ? new Date(ts).getTime() : 0));
+            let hasRecentFlip = latestFlipTs > 0 && isRecent(new Date(latestFlipTs));
+
+            const isDismissed = dismissedAlerts[symbol] && dismissedAlerts[symbol] >= latestFlipTs;
+            const showAlertOverlay = hasRecentFlip && !isDismissed;
+
             const isActive = selectedSymbol === symbol;
             const priceData = symbolPrices[symbol];
 
@@ -57,22 +64,51 @@ const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelec
                             )}
                         </div>
                     </td>
-                    {timeframes.map(tf => {
-                        const trend = stTrendByTf[tf.key];
-                        const emaBias = data.emaBiasByTf?.[tf.key];
-                        const flip = lastFlips[tf.key];
-                        const trendClass = trend === 1 ? 'u-bg' : (trend === -1 ? 'd-bg' : 'v-bg');
-                        const biasClass = emaBias === 1 ? 'e-u-bg' : (emaBias === -1 ? 'e-d-bg' : 'e-v-bg');
-
-                        return (
-                            <td key={tf.key} className="signal-cell">
-                                <div className="indicator-group" title={`${tf.label} Signals`}>
-                                    <div className={`trend-box ${trendClass} ${isRecent(flip) ? 'pulse' : ''}`}></div>
-                                    <div className={`bias-box ${biasClass}`}></div>
+                    {showAlertOverlay ? (
+                        <td colSpan="4" className="alert-overlay-cell">
+                            <div className="alert-overlay-content">
+                                <div className="alert-text-scroll">
+                                    {timeframes.map(tf => {
+                                        const flip = lastFlips[tf.key];
+                                        if (isRecent(flip)) {
+                                            const trend = data.stTrendByTf[tf.key];
+                                            return (
+                                                <span key={tf.key} className={`alert-callout ${trend === 1 ? 'up-alert' : 'dn-alert'}`}>
+                                                    🔥 {tf.label} {trend === 1 ? 'Bullish' : 'Bearish'}
+                                                </span>
+                                            );
+                                        }
+                                        return null;
+                                    })}
                                 </div>
-                            </td>
-                        );
-                    })}
+                                <button
+                                    className="close-alert-btn"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDismissedAlerts(prev => ({ ...prev, [symbol]: latestFlipTs }));
+                                    }}
+                                    title="Dismiss alert"
+                                >✕</button>
+                            </div>
+                        </td>
+                    ) : (
+                        timeframes.map(tf => {
+                            const trend = data.stTrendByTf[tf.key];
+                            const emaBias = data.emaBiasByTf?.[tf.key];
+                            const flip = lastFlips[tf.key];
+                            const trendClass = trend === 1 ? 'u-bg' : (trend === -1 ? 'd-bg' : 'v-bg');
+                            const biasClass = emaBias === 1 ? 'e-u-bg' : (emaBias === -1 ? 'e-d-bg' : 'e-v-bg');
+
+                            return (
+                                <td key={tf.key} className="signal-cell">
+                                    <div className="indicator-group" title={`${tf.label} Signals`}>
+                                        <div className={`trend-box ${trendClass} ${isRecent(flip) ? 'pulse' : ''}`}></div>
+                                        <div className={`bias-box ${biasClass}`}></div>
+                                    </div>
+                                </td>
+                            );
+                        })
+                    )}
                 </tr>
             );
         });

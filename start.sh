@@ -6,9 +6,12 @@
 
 JAR="target/trading-algo-1.0-SNAPSHOT.jar"
 
+echo "Building latest changes..."
+mvn clean package -DskipTests -q
+
 if [ ! -f "$JAR" ]; then
-  echo "JAR not found. Building first..."
-  mvn clean package -DskipTests
+  echo "Build failed. JAR not found."
+  exit 1
 fi
 
 echo "Starting Algo Trading Backend with ZGC..."
