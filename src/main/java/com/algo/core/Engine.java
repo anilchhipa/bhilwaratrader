@@ -30,6 +30,7 @@ public class Engine {
     private final RedisClient redisClient;
     private final TimescaleRepository timescaleRepository;
     private final LiveUpdateBroadcaster broadcaster;
+    private final com.algo.service.TelegramService telegramService;
     private final IndicatorConfig indicatorConfig;
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -39,11 +40,13 @@ public class Engine {
     private final ConcurrentHashMap<String, Long> lastTickQueueTime = new ConcurrentHashMap<>();
 
     public Engine(TokenManager tokenManager, RedisClient redisClient, TimescaleRepository timescaleRepository,
-            LiveUpdateBroadcaster broadcaster, IndicatorConfig indicatorConfig) {
+            LiveUpdateBroadcaster broadcaster, com.algo.service.TelegramService telegramService,
+            IndicatorConfig indicatorConfig) {
         this.tokenManager = tokenManager;
         this.redisClient = redisClient;
         this.timescaleRepository = timescaleRepository;
         this.broadcaster = broadcaster;
+        this.telegramService = telegramService;
         this.indicatorConfig = indicatorConfig;
 
         logger.info("Engine: Using {}", indicatorConfig);
@@ -59,7 +62,8 @@ public class Engine {
      */
     public void registerSymbol(String symbol) {
         if (!symbolStates.containsKey(symbol)) {
-            symbolStates.put(symbol, new SymbolState(symbol, this::onCandleComplete, indicatorConfig));
+            symbolStates.put(symbol,
+                    new SymbolState(symbol, this::onCandleComplete, this::onTrendFlip, indicatorConfig));
             logger.info("Engine: Registered {}", symbol);
         }
     }
@@ -91,6 +95,33 @@ public class Engine {
                 logger.error("Error async saving continuous candle: {}", e.getMessage());
             }
         }, asyncPool);
+    }
+
+    /**
+     * Callback triggered by SymbolState when a confirmed trend flip occurs on
+     * candle
+     * close.
+     */
+    private void onTrendFlip(String symbol, String timeframe, int trend) {
+        // Dispatch alert to mobile (Telegram) asynchronously
+        CompletableFuture.runAsync(() -> {
+            try {
+                if (telegramService != null) {
+                    telegramService.sendTrendFlipAlert(symbol, timeframe, trend);
+                }
+            } catch (Exception e) {
+                logger.error("Error sending Telegram alert: {}", e.getMessage());
+            }
+        }, asyncPool);
+    }
+
+    /**
+     * Sends a test alert on startup to confirm the Telegram Bot is active.
+     */
+    public void sendStartupMessage() {
+        if (telegramService != null) {
+            telegramService.sendMessage("🚀 *Algo Engine Online*\nBhilwaraTrader bot is monitoring 80+ symbols.");
+        }
     }
 
     public void onTick(String token, double price) {

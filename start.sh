@@ -14,5 +14,9 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
+# Configuration: Telegram Alerts
+export TELEGRAM_BOT_TOKEN="8311779416:AAEbw6JNO-NJl3ZmY5mj-kRQGmK-FZ0qNbQ"
+export TELEGRAM_CHAT_ID="787284320" 
+
 echo "Starting Algo Trading Backend with ZGC..."
 java -XX:+UseZGC -jar "$JAR"

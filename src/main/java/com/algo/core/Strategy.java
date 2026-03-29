@@ -27,6 +27,7 @@ public class Strategy {
     private double ema15_15_15_15_30_stable = 0;
 
     private com.algo.indicators.SuperTrendedMA stma;
+    private com.algo.indicators.SuperTrendedMA stma2;
 
     // --- Config-driven periods ---
     private final int p1; // EMA base period
@@ -48,6 +49,11 @@ public class Strategy {
                 config.getStMaLength(),
                 config.getStAtrPeriod(),
                 config.getStMultiplier(),
+                true);
+        this.stma2 = new com.algo.indicators.SuperTrendedMA(
+                config.getStMaLength2(),
+                config.getStAtrPeriod2(),
+                config.getStMultiplier2(),
                 true);
     }
 
@@ -76,19 +82,28 @@ public class Strategy {
             stma.adoptState(candle.getStMa(), candle.getStUp(), candle.getStDn(), candle.getStTrend(),
                     candle.getClose());
         }
+        if (stma2 != null) {
+            stma2.adoptState(candle.getStMa2(), candle.getStUp2(), candle.getStDn2(), candle.getStTrend2(),
+                    candle.getClose());
+        }
     }
 
     public synchronized void onNewCandle(Candle finishedCandle, Candle newCandle, int macroBias) {
 
         // 2. Commit the PREVIOUS candle's final live values to the stable baseline
         updateSnapshots();
-        if (stma != null)
-            stma.commit();
 
-        // 3. Calculate the first tick of the NEW candle
+        // 3. Calculate the first tick of the NEW candle for EMAs
         updateIndicators(newCandle.getLow(), false);
-        if (stma != null)
+
+        if (stma != null) {
+            stma.commit();
             stma.update(newCandle);
+        }
+        if (stma2 != null) {
+            stma2.commit();
+            stma2.update(newCandle);
+        }
 
         populateCandleIndicators(newCandle);
     }
@@ -99,6 +114,8 @@ public class Strategy {
         updateIndicators(candle.getLow(), true);
         if (stma != null)
             stma.updateLive(candle);
+        if (stma2 != null)
+            stma2.updateLive(candle);
         populateCandleIndicators(candle);
     }
 
@@ -111,21 +128,23 @@ public class Strategy {
         candle.setEma15_15_15_15_30(ema15_15_15_15_30);
 
         if (stma != null) {
-            java.util.List<Double> maHistory = stma.getMaHistory();
-            java.util.List<Double> upHistory = stma.getUpHistory();
-            java.util.List<Double> dnHistory = stma.getDnHistory();
-            java.util.List<Integer> trendHistory = stma.getTrendHistory();
-
-            if (!maHistory.isEmpty())
-                candle.setStMa(maHistory.get(maHistory.size() - 1));
-            if (!upHistory.isEmpty())
-                candle.setStUp(upHistory.get(upHistory.size() - 1));
-            if (!dnHistory.isEmpty())
-                candle.setStDn(dnHistory.get(dnHistory.size() - 1));
-            if (!trendHistory.isEmpty())
-                candle.setStTrend(trendHistory.get(trendHistory.size() - 1));
+            if (stma.getLiveMa() != 0)
+                candle.setStMa(stma.getLiveMa());
+            if (stma.getLiveUp() != 0)
+                candle.setStUp(stma.getLiveUp());
+            if (stma.getLiveDn() != 0)
+                candle.setStDn(stma.getLiveDn());
+            candle.setStTrend(stma.getLiveTrend());
         }
-
+        if (stma2 != null) {
+            if (stma2.getLiveMa() != 0)
+                candle.setStMa2(stma2.getLiveMa());
+            if (stma2.getLiveUp() != 0)
+                candle.setStUp2(stma2.getLiveUp());
+            if (stma2.getLiveDn() != 0)
+                candle.setStDn2(stma2.getLiveDn());
+            candle.setStTrend2(stma2.getLiveTrend());
+        }
     }
 
     /**
@@ -224,35 +243,40 @@ public class Strategy {
         return ema15_15_15_15;
     }
 
-    public List<Double> getEma15History() {
-        return ema15History;
-    }
-
-    public List<Double> getEma15_5History() {
-        return ema15_5History;
-    }
-
-    public List<Double> getEma15_15History() {
-        return ema15_15History;
-    }
-
-    public List<Double> getEma15_15_15History() {
-        return ema15_15_15History;
-    }
-
-    public List<Double> getEma15_15_15_15History() {
-        return ema15_15_15_15History;
-    }
-
-    public com.algo.indicators.SuperTrendedMA getStma() {
-        return stma;
-    }
-
     public double getEma15_15_15_15_30() {
         return ema15_15_15_15_30;
     }
 
-    public List<Double> getEma15_15_15_15_30History() {
-        return ema15_15_15_15_30History;
+    // --- Thread-safe history getters ---
+    // Returns a defensive snapshot of the internal list.
+    // Callers (e.g. WebSocket broadcaster) can safely iterate without
+    // risking ConcurrentModificationException from concurrent tick updates.
+
+    public synchronized List<Double> getEma15History() {
+        return new ArrayList<>(ema15History);
+    }
+
+    public synchronized List<Double> getEma15_5History() {
+        return new ArrayList<>(ema15_5History);
+    }
+
+    public synchronized List<Double> getEma15_15History() {
+        return new ArrayList<>(ema15_15History);
+    }
+
+    public synchronized List<Double> getEma15_15_15History() {
+        return new ArrayList<>(ema15_15_15History);
+    }
+
+    public synchronized List<Double> getEma15_15_15_15History() {
+        return new ArrayList<>(ema15_15_15_15History);
+    }
+
+    public synchronized List<Double> getEma15_15_15_15_30History() {
+        return new ArrayList<>(ema15_15_15_15_30History);
+    }
+
+    public synchronized com.algo.indicators.SuperTrendedMA getStma() {
+        return stma;
     }
 }

@@ -195,8 +195,28 @@ public class SuperTrendedMA {
         }
     }
 
+    /** Returns the live (intra-candle) MA value without list access. */
+    public double getLiveMa() {
+        return liveEma;
+    }
+
+    /** Returns the live (intra-candle) upper band without list access. */
+    public double getLiveUp() {
+        return liveUp;
+    }
+
+    /** Returns the live (intra-candle) lower band without list access. */
+    public double getLiveDn() {
+        return liveDn;
+    }
+
+    /** Returns the live (intra-candle) trend without list access. */
+    public int getLiveTrend() {
+        return liveTrend;
+    }
+
     public double getMA() {
-        return maHistory.isEmpty() ? 0 : maHistory.get(maHistory.size() - 1);
+        return liveEma;
     }
 
     public double getUp() {
@@ -211,19 +231,35 @@ public class SuperTrendedMA {
         return trend;
     }
 
+    /**
+     * Returns a defensive snapshot of MA history. Safe for external/concurrent
+     * reads.
+     */
     public List<Double> getMaHistory() {
-        return maHistory;
+        return new ArrayList<>(maHistory);
     }
 
+    /**
+     * Returns a defensive snapshot of upper-band history. Safe for
+     * external/concurrent reads.
+     */
     public List<Double> getUpHistory() {
-        return upHistory;
+        return new ArrayList<>(upHistory);
     }
 
+    /**
+     * Returns a defensive snapshot of lower-band history. Safe for
+     * external/concurrent reads.
+     */
     public List<Double> getDnHistory() {
-        return dnHistory;
+        return new ArrayList<>(dnHistory);
     }
 
+    /**
+     * Returns a defensive snapshot of trend history. Safe for external/concurrent
+     * reads.
+     */
     public List<Integer> getTrendHistory() {
-        return trendHistory;
+        return new ArrayList<>(trendHistory);
     }
 }

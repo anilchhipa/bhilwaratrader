@@ -40,6 +40,16 @@ public class IndicatorConfig {
     @Value("${indicator.supertrend.multiplier:0.5}")
     private double stMultiplier;
 
+    // --- SuperTrend 2 ---
+    @Value("${indicator.supertrend2.maLength:100}")
+    private int stMaLength2;
+
+    @Value("${indicator.supertrend2.atrPeriod:10}")
+    private int stAtrPeriod2;
+
+    @Value("${indicator.supertrend2.multiplier:0.5}")
+    private double stMultiplier2;
+
     @Value("${trading.paper-mode:false}")
     private boolean paperMode;
 
@@ -81,6 +91,18 @@ public class IndicatorConfig {
         return stMultiplier;
     }
 
+    public int getStMaLength2() {
+        return stMaLength2;
+    }
+
+    public int getStAtrPeriod2() {
+        return stAtrPeriod2;
+    }
+
+    public double getStMultiplier2() {
+        return stMultiplier2;
+    }
+
     public boolean isPaperMode() {
         return paperMode;
     }
@@ -89,8 +111,9 @@ public class IndicatorConfig {
     public String toString() {
         return String.format(
                 "IndicatorConfig{ema=%d, cascades=[%d,%d,%d,%d,%d], " +
-                        "st=[ma=%d, atr=%d, mult=%.2f]}",
+                        "st1=[ma=%d, atr=%d, mult=%.2f], st2=[ma=%d, atr=%d, mult=%.2f]}",
                 emaPeriod1, emaCascade1, emaCascade2, emaCascade3, emaCascade4, emaCascade5,
-                stMaLength, stAtrPeriod, stMultiplier);
+                stMaLength, stAtrPeriod, stMultiplier,
+                stMaLength2, stAtrPeriod2, stMultiplier2);
     }
 }

@@ -60,8 +60,15 @@ public class TradingApplication {
     public Engine engine(TokenManager tokenManager, RedisClient redisClient,
             com.algo.data.TimescaleRepository timescaleRepository,
             LiveUpdateBroadcaster broadcaster,
+            com.algo.service.TelegramService telegramService,
             IndicatorConfig indicatorConfig) {
-        return new Engine(tokenManager, redisClient, timescaleRepository, broadcaster, indicatorConfig);
+        return new Engine(tokenManager, redisClient, timescaleRepository, broadcaster, telegramService,
+                indicatorConfig);
+    }
+
+    @Bean
+    public com.algo.service.TelegramService telegramService() {
+        return new com.algo.service.TelegramService();
     }
 
     @Bean
@@ -109,12 +116,22 @@ public class TradingApplication {
                 // 0a. Initialize/Verify Schema
                 timescaleRepository.initializeSchema();
 
+                // 0b. Telegram Startup Probe (Verify ID and Action)
+                engine.sendStartupMessage();
                 // 0. Load symbols from DB
                 java.util.List<String[]> tracked = timescaleRepository.getTrackedSymbols();
                 System.out.println("Loading " + tracked.size() + " symbols from database...");
                 for (String[] row : tracked) {
                     tokenManager.register(row[0], row[1]);
                     engine.registerSymbol(row[0]);
+                }
+
+                // Internal Force-Add: Ensure SENSEX index is always registered for charts
+                // even if not in the DB watchlist.
+                if (tokenManager.getToken("SENSEX") == null) {
+                    System.out.println("Auto-registering SENSEX internal index...");
+                    tokenManager.register("SENSEX", "BSE");
+                    engine.registerSymbol("SENSEX");
                 }
 
                 // 1. Login

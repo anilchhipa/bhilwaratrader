@@ -38,8 +38,8 @@ public class TimescaleClient {
     public void save1MinCandles(String symbol, List<Candle> candles) {
         if (dataSource == null)
             return;
-        String sql = "INSERT INTO ohlc_data (time, symbol, open, high, low, close, volume) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (time, symbol) DO NOTHING";
+        String sql = "INSERT INTO ohlc_data (time, symbol, open, high, low, close) " +
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (time, symbol) DO NOTHING";
 
         try (Connection conn = dataSource.getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -51,7 +51,6 @@ public class TimescaleClient {
                 pstmt.setDouble(4, c.getHigh());
                 pstmt.setDouble(5, c.getLow());
                 pstmt.setDouble(6, c.getClose());
-                pstmt.setLong(7, c.getVolume());
                 pstmt.addBatch();
             }
             pstmt.executeBatch();

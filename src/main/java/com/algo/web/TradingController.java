@@ -132,59 +132,6 @@ public class TradingController {
         return result;
     }
 
-    @GetMapping("/breadth")
-    public Map<String, Object> getMarketBreadth() {
-        String[] timeframes = { "1min", "3min", "5min", "15min" };
-        Map<String, Object> result = new java.util.HashMap<>();
-
-        for (String tf : timeframes) {
-            int stUp = 0, stDown = 0, emaUp = 0, emaDown = 0, total = 0;
-
-            java.util.Set<String> top10Sensex = new java.util.HashSet<>(java.util.Arrays.asList(
-                    "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT",
-                    "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"));
-
-            for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
-                if (!top10Sensex.contains(entry.getKey())) {
-                    continue; // Skip symbols not in the top 10 Sensex list
-                }
-
-                Map<String, Candle> candles = entry.getValue().getCurrentCandles();
-                Candle c = candles.get(tf);
-                if (c == null)
-                    continue;
-                total++;
-
-                // SuperTrend direction
-                Integer trend = c.getStTrend();
-                if (trend != null && trend == 1)
-                    stUp++;
-                else if (trend != null && trend == -1)
-                    stDown++;
-
-                // EMA bias (ema15 vs ema15_5)
-                Double e15 = c.getEma15();
-                Double e15_5 = c.getEma15_5();
-                if (e15 != null && e15_5 != null) {
-                    if (e15 > e15_5)
-                        emaUp++;
-                    else
-                        emaDown++;
-                }
-            }
-
-            Map<String, Object> tfData = new java.util.HashMap<>();
-            tfData.put("stUp", stUp);
-            tfData.put("stDown", stDown);
-            tfData.put("emaUp", emaUp);
-            tfData.put("emaDown", emaDown);
-            tfData.put("total", total);
-            result.put(tf, tfData);
-        }
-
-        return result;
-    }
-
     @GetMapping("/state/{symbol}")
     public SymbolState getSymbolState(@PathVariable String symbol) {
         return engine.getState(symbol);
@@ -292,7 +239,7 @@ public class TradingController {
                 if (shouldAppend || shouldReplace) {
                     // Make a copy to avoid mutating the live memory reference while serializing
                     Candle copy = new Candle(active.getOpen(), active.getHigh(), active.getLow(), active.getClose(),
-                            active.getVolume(), active.getTimestamp());
+                            active.getTimestamp());
                     copy.setEma15(active.getEma15());
                     copy.setEma15_5(active.getEma15_5());
                     copy.setEma15_15(active.getEma15_15());
@@ -486,15 +433,22 @@ public class TradingController {
      */
     @GetMapping("/account/max-qty")
     public ResponseEntity<?> getMaxIntradayQty(
+            @RequestParam String symbol,
             @RequestParam double price,
             @RequestParam(defaultValue = "5") double leverage) {
         try {
             int maxQty = zerodhaClient.getMaxIntradayQty(price, leverage);
+            int lotSize = zerodhaClient.getLotSize(symbol);
+            if (lotSize > 1) {
+                maxQty = (maxQty / lotSize) * lotSize;
+            }
+
             java.util.Map<String, Double> funds = zerodhaClient.getAvailableFunds();
             double available = funds.getOrDefault("net", 0.0);
             return ResponseEntity.ok(Map.of(
                     "maxQty", maxQty,
                     "available", available,
+                    "lotSize", lotSize,
                     "leverage", leverage,
                     "price", price,
                     "totalNeeded", price * maxQty / leverage));
@@ -573,6 +527,18 @@ public class TradingController {
             // Round price to nearest 0.05 (NSE/BSE tick size requirement)
             price = Math.round(price * 20.0) / 20.0;
 
+            // Round quantity to nearest multiple of Lot Size
+            int lotSize = zerodhaClient.getLotSize(symbol);
+            if (lotSize > 1) {
+                int roundedQty = (qty / lotSize) * lotSize;
+                if (roundedQty == 0)
+                    roundedQty = lotSize; // Minimum 1 lot
+                if (roundedQty != qty) {
+                    logger.info("Rounding quantity for {}: {} -> {} (Lot Size: {})", symbol, qty, roundedQty, lotSize);
+                    qty = roundedQty;
+                }
+            }
+
             String orderId = zerodhaClient.placeLimitOrder(symbol, exchange, txnType, qty, price, product, variety);
             return ResponseEntity.ok(Map.of(
                     "orderId", orderId,
@@ -609,6 +575,12 @@ public class TradingController {
 
             // Round price to nearest 0.05
             newPrice = Math.round(newPrice * 20.0) / 20.0;
+
+            // Round quantity to nearest multiple of Lot Size if symbol can be matched
+            // In modify request, we often don't have the symbol. We'd need to fetch order
+            // details first.
+            // For now, we assume the UI passed a correct qty, but price is the main
+            // drag-target.
 
             String reqVariety = (String) req.get("variety");
             String variety = reqVariety != null ? reqVariety
@@ -656,6 +628,9 @@ public class TradingController {
         Map<String, Object> matrix = new java.util.HashMap<>();
         for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
             String sym = entry.getKey();
+            if (sym.equals("SENSEX"))
+                continue; // Explicitly hide SENSEX from the left panel/matrix
+
             SymbolState state = entry.getValue();
             Map<String, Object> symData = new java.util.HashMap<>();
             Map<String, Candle> currentCandles = state.getCurrentCandles();
@@ -685,44 +660,6 @@ public class TradingController {
             matrix.put(sym, symData);
         }
         result.put("matrix", matrix);
-
-        // 2. Breadth (Re-using logic from getMarketBreadth)
-        String[] bTfs = { "1min", "3min", "5min", "15min" };
-        Map<String, Object> breadth = new java.util.HashMap<>();
-        java.util.Set<String> top10Sensex = new java.util.HashSet<>(java.util.Arrays.asList(
-                "HDFCBANK", "RELIANCE", "ICICIBANK", "INFY", "LT", "ITC", "TCS", "BHARTIARTL", "AXISBANK", "SBIN"));
-
-        for (String tf : bTfs) {
-            int stUp = 0, stDown = 0, emaUp = 0, emaDown = 0, total = 0;
-            for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
-                if (!top10Sensex.contains(entry.getKey()))
-                    continue;
-                Candle c = entry.getValue().getCurrentCandles().get(tf);
-                if (c == null)
-                    continue;
-                total++;
-                if (c.getStTrend() != null) {
-                    if (c.getStTrend() == 1)
-                        stUp++;
-                    else if (c.getStTrend() == -1)
-                        stDown++;
-                }
-                if (c.getEma15() != null && c.getEma15_5() != null) {
-                    if (c.getEma15() > c.getEma15_5())
-                        emaUp++;
-                    else
-                        emaDown++;
-                }
-            }
-            Map<String, Object> tfB = new java.util.HashMap<>();
-            tfB.put("stUp", stUp);
-            tfB.put("stDown", stDown);
-            tfB.put("emaUp", emaUp);
-            tfB.put("emaDown", emaDown);
-            tfB.put("total", total);
-            breadth.put(tf, tfB);
-        }
-        result.put("breadth", breadth);
 
         return result;
     }

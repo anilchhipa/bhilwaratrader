@@ -47,6 +47,24 @@ public class ZerodhaClient {
         kiteConnect.setUserId(userId);
     }
 
+    private final java.util.Map<String, Integer> lotSizeCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public int getLotSize(String symbol) {
+        if (lotSizeCache.containsKey(symbol))
+            return lotSizeCache.get(symbol);
+
+        java.util.List<com.zerodhatech.models.Instrument> all = getAllInstruments();
+        if (all != null) {
+            for (com.zerodhatech.models.Instrument inst : all) {
+                if (symbol.equals(inst.tradingsymbol)) {
+                    lotSizeCache.put(symbol, inst.lot_size);
+                    return inst.lot_size;
+                }
+            }
+        }
+        return 1; // Default
+    }
+
     public boolean login() {
         logger.info("ZerodhaClient: Starting Playwright headless browser login for {}", userId);
 
@@ -286,7 +304,8 @@ public class ZerodhaClient {
     }
 
     private static final java.util.Set<String> SENSEX_30_STOCKS = new java.util.HashSet<>(
-            java.util.Arrays.asList("RELIANCE", "HDFCBANK", "ICICIBANK", "INFOSYS", "ITC", "LT", "TCS", "AXISBANK",
+            java.util.Arrays.asList("RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "LT", "TCS",
+                    "AXISBANK",
                     "KOTAKBANK", "SBIN", "BHARTIARTL", "HINDUNILVR", "TITAN", "BAJFINANCE", "MARUTI", "SUNPHARMA",
                     "ASIANPAINT", "HCLTECH", "ULTRACEMCO", "INDUSINDBK", "M&M", "NESTLEIND", "POWERGRID", "TATASTEEL",
                     "NTPC", "JSWSTEEL", "ADANIPORTS", "TECHM", "WIPRO", "BAJAJFINSRV"));
@@ -690,6 +709,11 @@ public class ZerodhaClient {
         java.util.Map<String, java.util.List<String>> byExchange = new java.util.HashMap<>();
         for (String symbol : tokenManager.getAllSymbols()) {
             String exchange = tokenManager.getExchangeType(symbol);
+            // Dynamic override: indices like SENSEX must be resolved against BSE
+            // regardless of what the database says (handles legacy BFO/NFO mapping bugs)
+            if (symbol.equals("SENSEX") || symbol.equals("BANKEX")) {
+                exchange = "BSE";
+            }
             byExchange.computeIfAbsent(exchange, k -> new java.util.ArrayList<>()).add(symbol);
         }
 
@@ -704,12 +728,27 @@ public class ZerodhaClient {
                 logger.info("ZerodhaClient: Got {} instruments from {}", instruments.size(), exchange);
 
                 for (com.zerodhatech.models.Instrument inst : instruments) {
+                    // Check direct trading symbol match (standard)
                     if (symbolSet.contains(inst.tradingsymbol)) {
                         String token = String.valueOf(inst.instrument_token);
                         tokenManager.updateToken(inst.tradingsymbol, token);
                         logger.info("ZerodhaClient: Resolved {} -> token={} (exchange={}, type={}, expiry={})",
                                 inst.tradingsymbol, token, inst.exchange, inst.instrument_type, inst.expiry);
                         symbolSet.remove(inst.tradingsymbol);
+                    }
+                    // Fallback for indices (e.g. SENSEX might be listed as 'BSE SENSEX' name but we
+                    // want 'SENSEX' symbol)
+                    else {
+                        for (String targetSym : new java.util.ArrayList<>(symbolSet)) {
+                            // Case-insensitive name match (handles 'SENSEX' vs 'SENSEX' name discrepancies)
+                            if (inst.name != null && inst.name.equalsIgnoreCase(targetSym)) {
+                                String token = String.valueOf(inst.instrument_token);
+                                tokenManager.updateToken(targetSym, token);
+                                logger.info("ZerodhaClient: Resolved {} (via name '{}') -> token={} (exchange={})",
+                                        targetSym, inst.name, token, inst.exchange);
+                                symbolSet.remove(targetSym);
+                            }
+                        }
                     }
                 }
 

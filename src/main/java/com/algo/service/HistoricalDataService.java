@@ -51,9 +51,10 @@ public class HistoricalDataService {
             return;
 
         try {
-            // Require 2000 candles minimum to ensure cascaded EMAs are properly
-            // warmed up. The deepest EMA cascade (6 levels) needs ~3000+ candles.
-            int requiredCount = 2000;
+            // Reduced requiredCount to 1000. This is still 60x the lookback for EMAs
+            // and ensures tiered loading (which might cap at 1500 candles) skips the API
+            // call.
+            int requiredCount = 1000;
             System.out.println("Checking historical data for " + symbol
                     + (targetTimeframe != null ? " [" + targetTimeframe + "]" : ""));
 
@@ -62,15 +63,19 @@ public class HistoricalDataService {
                     continue;
 
                 if (shouldFetch(symbol, tf, requiredCount)) {
-                    // 1min : 60 days → ~4500 candles (cascaded EMAs need 3000+)
-                    // 3min : 30 days → ~1500 candles
-                    // 5min : 60 days → ~2250 candles
-                    // 15min: 60 days → ~750 candles
-                    int days = 60; // default for 1min and 15min
-                    if (tf.equals("3min"))
+                    // Optimized tiered loading:
+                    // 1min : 7 days → ~2600 candles (Enough for EMA/SuperTrend warm-up)
+                    // 3min : 15 days → ~1800 candles
+                    // 5min : 30 days → ~2250 candles
+                    // 15min: 60 days → ~1500 candles (Longer history for higher TFs)
+                    int days = 60;
+                    if (tf.equals("1min"))
+                        days = 7;
+                    else if (tf.equals("3min"))
+                        days = 15;
+                    else if (tf.equals("5min"))
                         days = 30;
-                    if (tf.equals("5min"))
-                        days = 60;
+
                     fetchAndSave(symbol, token, tf, days);
                 }
             }
@@ -129,6 +134,8 @@ public class HistoricalDataService {
     }
 
     private String resolveExchange(String symbol) {
+        if (symbol.equals("SENSEX") || symbol.equals("BANKEX") || symbol.startsWith("BSE:"))
+            return "BSE";
         if (symbol.startsWith("SENSEX") || symbol.startsWith("BANKEX"))
             return "BFO";
         if (symbol.startsWith("NIFTY") || symbol.startsWith("BANKNIFTY") || symbol.startsWith("FINNIFTY")
@@ -136,8 +143,6 @@ public class HistoricalDataService {
             return "NFO";
         if (symbol.startsWith("MCX"))
             return "MCX";
-        if (symbol.startsWith("BSE:"))
-            return "BSE";
         return "NSE";
     }
 

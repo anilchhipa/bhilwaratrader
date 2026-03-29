@@ -7,7 +7,6 @@ public class Candle {
     private double high;
     private double low;
     private double close;
-    private long volume;
     private LocalDateTime timestamp;
 
     // Indicator values (nullable)
@@ -22,17 +21,18 @@ public class Candle {
     private Double stDn;
     private Integer stTrend;
 
-    public Candle(double open, double high, double low, double close, long volume, LocalDateTime timestamp) {
+    // Second SuperTrend (e.g. maLength=100)
+    private Double stMa2;
+    private Double stUp2;
+    private Double stDn2;
+    private Integer stTrend2;
+
+    public Candle(double open, double high, double low, double close, LocalDateTime timestamp) {
         this.open = open;
         this.high = high;
         this.low = low;
         this.close = close;
-        this.volume = volume;
         this.timestamp = timestamp;
-    }
-
-    public Candle(double open, double high, double low, double close, LocalDateTime timestamp) {
-        this(open, high, low, close, 0L, timestamp);
     }
 
     public double getOpen() {
@@ -49,10 +49,6 @@ public class Candle {
 
     public double getClose() {
         return close;
-    }
-
-    public long getVolume() {
-        return volume;
     }
 
     public LocalDateTime getTimestamp() {
@@ -73,10 +69,6 @@ public class Candle {
 
     public void setClose(double close) {
         this.close = close;
-    }
-
-    public void setVolume(long volume) {
-        this.volume = volume;
     }
 
     public void setTimestamp(LocalDateTime timestamp) {
@@ -162,6 +154,38 @@ public class Candle {
 
     public void setStTrend(Integer stTrend) {
         this.stTrend = stTrend;
+    }
+
+    public Double getStMa2() {
+        return stMa2;
+    }
+
+    public void setStMa2(Double stMa2) {
+        this.stMa2 = stMa2;
+    }
+
+    public Double getStUp2() {
+        return stUp2;
+    }
+
+    public void setStUp2(Double stUp2) {
+        this.stUp2 = stUp2;
+    }
+
+    public Double getStDn2() {
+        return stDn2;
+    }
+
+    public void setStDn2(Double stDn2) {
+        this.stDn2 = stDn2;
+    }
+
+    public Integer getStTrend2() {
+        return stTrend2;
+    }
+
+    public void setStTrend2(Integer stTrend2) {
+        this.stTrend2 = stTrend2;
     }
 
 }

@@ -31,17 +31,28 @@ public class SymbolState {
     // Timeframe -> Last Trend Flip Time
     private final Map<String, java.time.LocalDateTime> lastFlipTimes = new ConcurrentHashMap<>();
 
+    // Timeframe -> Last Trend confirmed at candle close
+    private final Map<String, Integer> confirmedTrendMap = new ConcurrentHashMap<>();
+
     @FunctionalInterface
     public interface CandleCompleteListener {
         void onComplete(String symbol, String timeframe, Candle candle);
     }
 
+    @FunctionalInterface
+    public interface TrendFlipListener {
+        void onFlip(String symbol, String timeframe, int trend);
+    }
+
     // Callback when a candle is completed
     private CandleCompleteListener onCandleComplete;
+    private TrendFlipListener onTrendFlip;
 
-    public SymbolState(String symbol, CandleCompleteListener onCandleComplete, IndicatorConfig indicatorConfig) {
+    public SymbolState(String symbol, CandleCompleteListener onCandleComplete, TrendFlipListener onTrendFlip,
+            IndicatorConfig indicatorConfig) {
         this.symbol = symbol;
         this.onCandleComplete = onCandleComplete;
+        this.onTrendFlip = onTrendFlip;
         for (String tf : timeframes) {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
             strategies.put(tf, new Strategy(indicatorConfig));
@@ -108,6 +119,7 @@ public class SymbolState {
         // Find when the trend last flipped for this timeframe
         Integer currentTrend = last.getStTrend();
         if (currentTrend != null) {
+            confirmedTrendMap.put(tf, currentTrend);
             for (int i = historicalCandles.size() - 2; i >= 0; i--) {
                 Candle prev = historicalCandles.get(i);
                 if (prev.getStTrend() != null && !prev.getStTrend().equals(currentTrend)) {
@@ -137,7 +149,7 @@ public class SymbolState {
                 }
             }
 
-            Candle newCandle = new Candle(price, price, price, price, 0, start);
+            Candle newCandle = new Candle(price, price, price, price, start);
 
             // Get the bias from the 15min "Compass" chart
             Strategy macroStrategy = strategies.get("15min");
@@ -147,6 +159,21 @@ public class SymbolState {
 
             // Update Strategy (New Candle Mode) with MTF filtering
             strategies.get(tf).onNewCandle(current, newCandle, macroBias);
+
+            // Confirmed Trend Flip Detection (only on candle close)
+            Integer trendAtClose = current.getStTrend();
+            Integer lastConfirmed = confirmedTrendMap.get(tf);
+            if (trendAtClose != null && lastConfirmed != null && !trendAtClose.equals(lastConfirmed)) {
+                lastFlipTimes.put(tf, current.getTimestamp());
+                // Alert for mobile notification
+                if (onTrendFlip != null) {
+                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose);
+                }
+            }
+            if (trendAtClose != null) {
+                confirmedTrendMap.put(tf, trendAtClose);
+            }
+
             current = newCandle;
             currentCandles.put(tf, current);
         } else {
@@ -171,13 +198,7 @@ public class SymbolState {
             current.setClose(price);
 
             // Update Strategy (Live Update Mode)
-            Integer prevTrend = current.getStTrend();
             strategies.get(tf).updateLastCandle(current);
-
-            // Check if trend flipped during this live update
-            if (prevTrend != null && current.getStTrend() != null && !current.getStTrend().equals(prevTrend)) {
-                lastFlipTimes.put(tf, current.getTimestamp());
-            }
         }
 
         // Pull indicators from Strategy into the indicatorValues map for
@@ -217,6 +238,12 @@ public class SymbolState {
         safePut(values, "ST_UP", current.getStUp());
         safePut(values, "ST_DN", current.getStDn());
         safePut(values, "ST_TREND", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
+
+        // SuperTrend 2 (ST100)
+        safePut(values, "ST_MA2", current.getStMa2());
+        safePut(values, "ST_UP2", current.getStUp2());
+        safePut(values, "ST_DN2", current.getStDn2());
+        safePut(values, "ST_TREND2", (double) (current.getStTrend2() != null ? current.getStTrend2() : 0));
     }
 
     private void safePut(Map<String, Double> map, String key, Double value) {
