@@ -79,78 +79,78 @@ function App() {
   }, [themeColors]);
 
 
-  const fetchAll = useCallback(() => {
-    axios.get(`${API_BASE}/api/monitor/all`)
-      .then(res => {
-        const { matrix } = res.data;
-        setIsOffline(false);
-        setSymbolPrices(prev => {
-          const hasChanged = Object.keys(matrix).some(sym => {
-            const prevSym = prev[sym] || {};
-            const nextSym = matrix[sym];
-            return prevSym.price !== nextSym.price ||
-              JSON.stringify(prevSym.stTrendByTf) !== JSON.stringify(nextSym.stTrendByTf);
-          });
-          return hasChanged ? { ...prev, ...matrix } : prev;
-        });
-        const newTrackedSymbols = Object.keys(matrix);
-        setTrackedSymbols(prev => (prev.length !== newTrackedSymbols.length || prev.some((s, i) => s !== newTrackedSymbols[i])) ? newTrackedSymbols : prev);
+  const fetchAll = useCallback(async () => {
+    try {
+      // 1. Fetch main matrix (now includes SENSEX if backend is restarted)
+      const res = await axios.get(`${API_BASE}/api/monitor/all`);
+      const { matrix } = res.data;
+      setIsOffline(false);
 
-        // --- GLOBAL TREND FLIP DISCOVERY ---
-        const discoveredFlips = [];
-        Object.keys(matrix).forEach(sym => {
-          const data = matrix[sym];
-          const flips = data.lastFlipTimes || {};
-          Object.keys(flips).forEach(tf => {
-            const currentFlipTs = flips[tf] ? new Date(flips[tf]).getTime() : 0;
-            if (currentFlipTs > 0) {
-              const key = `${sym}-${tf}`;
-              // Initialize seen flips on first load without toast
-              if (seenFlipsRef.current[key] === undefined) {
-                seenFlipsRef.current[key] = currentFlipTs;
-                return;
-              }
-              // If flip is newer than last seen
-              if (currentFlipTs > seenFlipsRef.current[key]) {
-                seenFlipsRef.current[key] = currentFlipTs;
-                const trend = data.stTrendByTf[tf];
-                discoveredFlips.push({
-                  id: `${key}-${currentFlipTs}`,
-                  sym, tf, trend,
-                  type: trend === 1 ? 'up' : 'dn'
-                });
-              }
-            }
-          });
-        });
-
-        if (discoveredFlips.length > 0) {
-          // Play a subtle sound or just show toasts
-          setAppNotifications(prev => [...prev.slice(-3), ...discoveredFlips]);
-          discoveredFlips.forEach(df => {
-            setTimeout(() => {
-              setAppNotifications(prev => prev.filter(n => n.id !== df.id));
-            }, 8000);
-          });
-        }
-
-
-        if (!hasShownReadyPopup.current) {
-          hasShownReadyPopup.current = true;
-          setBackendReady(true);
-          setShowReadyPopup(true);
-          setTimeout(() => setShowReadyPopup(false), 5000);
-        }
-      })
-      .catch(err => {
-        console.error("Monitor poll fail", err);
-        setIsOffline(true);
+      // 2. Fetch SENSEX state independently (fallback for old backend or missing data)
+      const sRes = await axios.get(`${API_BASE}/api/state/SENSEX`);
+      const indMap = sRes.data?.indicatorValues || {};
+      const sTrends = { stTrendByTf: {}, stTrend2ByTf: {} };
+      ['1min', '3min', '5min', '15min'].forEach(tf => {
+        const v = indMap[tf] || {};
+        const st1 = v.ST_TREND != null ? Math.round(v.ST_TREND) : null;
+        sTrends.stTrendByTf[tf] = st1;
+        sTrends.stTrend2ByTf[tf] = v.ST_TREND2 != null ? Math.round(v.ST_TREND2) : st1;
       });
+
+      const mergedMatrix = { ...matrix, SENSEX: { ...(matrix.SENSEX || {}), ...sTrends } };
+
+      setSymbolPrices(prev => {
+        const hasChanged = Object.keys(mergedMatrix).some(sym => {
+          const prevSym = prev[sym] || {};
+          const nextSym = mergedMatrix[sym];
+          return prevSym.price !== nextSym.price ||
+            JSON.stringify(prevSym.stTrendByTf) !== JSON.stringify(nextSym.stTrendByTf);
+        });
+        return hasChanged ? { ...prev, ...mergedMatrix } : prev;
+      });
+
+      const newTrackedSymbols = Object.keys(matrix);
+      setTrackedSymbols(prev => (prev.length !== newTrackedSymbols.length || prev.some((s, i) => s !== newTrackedSymbols[i])) ? newTrackedSymbols : prev);
+
+      // --- TREND FLIP DISCOVERY ---
+      const discoveredFlips = [];
+      Object.keys(matrix).forEach(sym => {
+        const data = matrix[sym];
+        const flips = data.lastFlipTimes || {};
+        Object.keys(flips).forEach(tf => {
+          const ct = flips[tf] ? new Date(flips[tf]).getTime() : 0;
+          if (ct > 0) {
+            const key = `${sym}-${tf}`;
+            if (seenFlipsRef.current[key] === undefined) { seenFlipsRef.current[key] = ct; return; }
+            if (ct > seenFlipsRef.current[key]) {
+              seenFlipsRef.current[key] = ct;
+              const trend = data.stTrendByTf[tf];
+              discoveredFlips.push({ id: `${key}-${ct}`, sym, tf, trend, type: trend === 1 ? 'up' : 'dn' });
+            }
+          }
+        });
+      });
+
+      if (discoveredFlips.length > 0) {
+        setAppNotifications(prev => [...prev.slice(-3), ...discoveredFlips]);
+        discoveredFlips.forEach(df => { setTimeout(() => setAppNotifications(prev => prev.filter(n => n.id !== df.id)), 8000); });
+      }
+
+      if (!hasShownReadyPopup.current) {
+        hasShownReadyPopup.current = true;
+        setBackendReady(true);
+        setShowReadyPopup(true);
+        setTimeout(() => setShowReadyPopup(false), 5000);
+      }
+    } catch (err) {
+      console.error("Monitor poll fail", err);
+      setIsOffline(true);
+    }
   }, []);
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 2000);
+    const interval = setInterval(fetchAll, 10000); // 10s poll - balanced for 1m TF
     return () => clearInterval(interval);
   }, [fetchAll]);
 
@@ -195,6 +195,7 @@ function App() {
                   isMaximized={true}
                   onPriceUpdate={handlePriceUpdate}
                   themeColors={themeColors}
+                  symbolPrices={symbolPrices}
                 />
               </div>
             ) : (
@@ -211,6 +212,7 @@ function App() {
                       isMaximized={false}
                       onPriceUpdate={handlePriceUpdate}
                       themeColors={themeColors}
+                      symbolPrices={symbolPrices}
                     />
                   </div>
                 ))}

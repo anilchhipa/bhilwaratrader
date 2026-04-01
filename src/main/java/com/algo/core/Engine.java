@@ -141,10 +141,10 @@ public class Engine {
             long now = System.currentTimeMillis();
             long lastQueue = lastTickQueueTime.getOrDefault(symbol, 0L);
 
-            // Throttle async dispatch to max 1 time per second per symbol
-            // This prevents overwhelming Redis and STOMP WebSocket brokers by reducing
-            // traffic by 90%
-            if (now - lastQueue >= 1000) {
+            // Throttle async dispatch to max 4 times per second (250ms) per symbol
+            // This provides a much more responsive "live" feel while still protecting
+            // downstream Redis and WebSocket buffers from excessive tick flooding.
+            if (now - lastQueue >= 250) {
                 lastTickQueueTime.put(symbol, now);
                 CompletableFuture.runAsync(() -> syncToRedis(state), asyncPool);
             }

@@ -80,17 +80,25 @@ const SignalMatrixList = ({ symbols, symbolPrices, selectedSymbol, onSymbolSelec
                         </div>
                     </td>
                     {timeframes.map(tf => {
-                        const trend = data.stTrendByTf?.[tf.key];
+                        const trend1 = data.stTrendByTf?.[tf.key];
+                        const trend2 = data.stTrend2ByTf?.[tf.key] ?? trend1; // Fallback to T1 if T2 is missing
                         const emaBias = data.emaBiasByTf?.[tf.key];
                         const flip = lastFlips[tf.key];
-                        const trendClass = trend === 1 ? 'u-bg' : (trend === -1 ? 'd-bg' : 'v-bg');
+
+                        const t1Class = trend1 === 1 ? 'u-bg' : (trend1 === -1 ? 'd-bg' : 'v-bg');
+                        const t2Class = trend2 === 1 ? 'u-bg' : (trend2 === -1 ? 'd-bg' : 'v-bg');
                         const biasClass = emaBias === 1 ? 'e-u-bg' : (emaBias === -1 ? 'e-d-bg' : 'e-v-bg');
 
                         return (
                             <td key={tf.key} className="signal-cell">
-                                <div className="indicator-group" title={`${tf.label} Signals`}>
-                                    <div className={`trend-box ${trendClass} ${isRecent(flip) ? 'pulse' : ''}`}></div>
-                                    <div className={`bias-box ${biasClass}`}></div>
+                                <div className="indicator-group" title={`${tf.label}: T1, T2, EMA`}>
+                                    <div className="st-group">
+                                        <div className="st-boxes-row">
+                                            <div className={`st-box ${t1Class} ${isRecent(flip) ? 'pulse' : ''}`} title="T1"></div>
+                                            <div className={`st-box ${t2Class}`} title="T2"></div>
+                                        </div>
+                                        <div className={`ema-underline ${biasClass}`} title="EMA Bias"></div>
+                                    </div>
                                 </div>
                             </td>
                         );

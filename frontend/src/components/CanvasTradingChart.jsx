@@ -12,7 +12,7 @@ const COLORS = {
 
 const CanvasTradingChart = React.memo(({
     symbol = 'SENSEX', initialInterval = '3min',
-    externalVisibility, onMaximize, isMaximized
+    externalVisibility, onMaximize, isMaximized, symbolPrices
 }) => {
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
@@ -22,6 +22,7 @@ const CanvasTradingChart = React.memo(({
     const [isReplayMode, setIsReplayMode] = useState(false);
     const [replayIndex, setReplayIndex] = useState(-1);
     const [isReplaying, setIsReplaying] = useState(false);
+
 
     // NAVIGATION STATE
     const scrollOffset = useRef(0);
@@ -118,6 +119,7 @@ const CanvasTradingChart = React.memo(({
         return { bs, p2y, y2p, i2x: (i) => (i - start) * bs + (bs / 2), start, end, ch, cw, pt, pb, pr, low, high, slice };
     }, [visibleBars, isLog, yRange]);
 
+
     const render = useCallback(() => {
         const canvas = mainCanvasRef.current; if (!canvas || !dData.length) return;
         const ctx = canvas.getContext('2d'), dpr = window.devicePixelRatio || 1,
@@ -157,7 +159,7 @@ const CanvasTradingChart = React.memo(({
         const emas = ['ema15', 'ema15_5', 'ema15_15', 'ema15_15_15', 'ema15_15_15_15', 'ema15_15_15_15_30'];
         emas.forEach((k, idx) => {
             if (!vis[k.toUpperCase()]) return;
-            ctx.strokeStyle = COLORS.emas[idx]; ctx.lineWidth = 1.5; ctx.beginPath();
+            ctx.strokeStyle = COLORS.emas[idx]; ctx.lineWidth = 1.0; ctx.beginPath();
             math.slice.forEach((c, i) => { const x = math.i2x(math.start + i), y = math.p2y(c[k]); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
             ctx.stroke();
         });
@@ -206,6 +208,7 @@ const CanvasTradingChart = React.memo(({
                 ctx.fillText(label, x, math.pt + math.ch + 13);
             }
         });
+
         ctx.restore();
     }, [dData, getMath, vis, symbol]);
 
@@ -225,6 +228,27 @@ const CanvasTradingChart = React.memo(({
             ctx.fillStyle = '#3b82f6'; ctx.fillRect(math.cw, mouse.y - 10, math.pr, 20);
             ctx.fillStyle = '#fff'; ctx.font = 'bold 9px Inter';
             ctx.fillText(math.y2p(mouse.y).toFixed(2), math.cw + (math.pr / 2), mouse.y + 4);
+
+            // X-Axis Highlight
+            const barIdx = Math.floor(mouse.x / math.bs) + math.start;
+            if (barIdx >= 0 && barIdx < dData.length) {
+                const candle = dData[barIdx];
+                const date = new Date(candle.timestamp);
+                const label = date.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) + " " +
+                    date.getHours().toString().padStart(2, '0') + ":" + date.getMinutes().toString().padStart(2, '0');
+
+                ctx.font = 'bold 9px Inter';
+                const tw = ctx.measureText(label).width + 10;
+                const tx = Math.max(tw / 2, Math.min(math.cw - tw / 2, mouse.x));
+
+                ctx.fillStyle = '#3b82f6';
+                ctx.beginPath();
+                ctx.roundRect(tx - tw / 2, math.pt + math.ch + 3, tw, 14, 3);
+                ctx.fill();
+
+                ctx.fillStyle = '#fff';
+                ctx.fillText(label, tx, math.pt + math.ch + 13);
+            }
         }
         orderLines.forEach(l => {
             const y = math.p2y(l.price); if (y < math.pt || y > math.pt + math.ch) return;
@@ -268,9 +292,27 @@ const CanvasTradingChart = React.memo(({
                 setLoading(false);
             })
             .catch(err => { if (!axios.isCancel(err)) { console.error(err); setLoading(false); } });
+
+
         return () => controller.abort();
     }, [symbol, interval]);
-    useLiveFeed(u => { if (!isReplayMode && u.symbol === symbol && u.interval === interval) { setData(p => { const f = { ...u.ohlc, ...u.indicators, timestamp: u.ohlc.t, open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c }; const nx = [...p]; if (nx.length && nx[nx.length - 1].timestamp === f.timestamp) nx[nx.length - 1] = f; else nx.push(f); return nx; }); if (isFollowing.current) render(); } });
+    useLiveFeed(symbol, interval, useCallback(u => {
+        if (isReplayMode) return;
+        setData(p => {
+            const f = {
+                ...u.ohlc, ...u.indicators,
+                timestamp: u.ohlc.t,
+                open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c
+            };
+            const nx = [...p];
+            if (nx.length && nx[nx.length - 1].timestamp === f.timestamp) {
+                nx[nx.length - 1] = f;
+            } else {
+                nx.push(f);
+            }
+            return nx;
+        });
+    }, [isReplayMode]));
     useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 250); return () => clearInterval(t); }, [isReplaying]);
     useEffect(() => {
         render();

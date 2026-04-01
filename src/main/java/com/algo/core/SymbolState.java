@@ -228,22 +228,24 @@ public class SymbolState {
         Map<String, Double> values = indicatorValues.get(tf);
 
         // Populate indicators using a safe put method for ConcurrentHashMap
-        safePut(values, "EMA15", strategy.getEma15());
-        safePut(values, "EMA15_5", strategy.getEma15_5());
-        safePut(values, "EMA15_15", strategy.getEma15_15());
-        safePut(values, "EMA15_15_15", strategy.getEma15_15_15());
-        safePut(values, "EMA15_15_15_15", strategy.getEma15_15_15_15());
-        safePut(values, "EMA15_15_15_15_30", strategy.getEma15_15_15_15_30());
-        safePut(values, "ST_MA", current.getStMa());
-        safePut(values, "ST_UP", current.getStUp());
-        safePut(values, "ST_DN", current.getStDn());
-        safePut(values, "ST_TREND", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
+        // Keys must exactly match Candle.java field names for frontend consistency
+        safePut(values, "ema15", strategy.getEma15());
+        safePut(values, "ema15_5", strategy.getEma15_5());
+        safePut(values, "ema15_15", strategy.getEma15_15());
+        safePut(values, "ema15_15_15", strategy.getEma15_15_15());
+        safePut(values, "ema15_15_15_15", strategy.getEma15_15_15_15());
+        safePut(values, "ema15_15_15_15_30", strategy.getEma15_15_15_15_30());
+
+        safePut(values, "stMa", current.getStMa());
+        safePut(values, "stUp", current.getStUp());
+        safePut(values, "stDn", current.getStDn());
+        safePut(values, "stTrend", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
 
         // SuperTrend 2 (ST100)
-        safePut(values, "ST_MA2", current.getStMa2());
-        safePut(values, "ST_UP2", current.getStUp2());
-        safePut(values, "ST_DN2", current.getStDn2());
-        safePut(values, "ST_TREND2", (double) (current.getStTrend2() != null ? current.getStTrend2() : 0));
+        safePut(values, "stMa2", current.getStMa2());
+        safePut(values, "stUp2", current.getStUp2());
+        safePut(values, "stDn2", current.getStDn2());
+        safePut(values, "stTrend2", (double) (current.getStTrend2() != null ? current.getStTrend2() : 0));
     }
 
     private void safePut(Map<String, Double> map, String key, Double value) {

@@ -743,6 +743,20 @@
   }
 }
 
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor;
+  }
+
+  50% {
+    opacity: 0.75;
+    box-shadow: 0 0 14px currentColor;
+  }
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -1081,24 +1095,42 @@
 .indicator-group {
   display: flex;
   flex-direction: row;
-  /* Horizontal Alignment */
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 12px;
 }
 
-.trend-box {
-  width: 9px;
-  height: 9px;
+.st-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: center;
+}
+
+.st-boxes-row {
+  display: flex;
+  gap: 1px;
+}
+
+.st-box {
+  width: 5px;
+  height: 5px;
   border-radius: 1px;
-  transition: all 0.2s ease;
 }
 
-.bias-box {
-  width: 2px;
-  height: 9px;
-  border-radius: 0.5px;
+.ema-underline {
+  width: 11px;
+  height: 2px;
+  border-radius: 1px;
+  margin-top: 1px;
 }
+
+.pillar-segment.bias {
+  flex: 0.8;
+  height: 2px !important;
+}
+
+/* Bias is thin */
 
 /* --- Instrument Data Cells --- */
 .symbol-cell-main {

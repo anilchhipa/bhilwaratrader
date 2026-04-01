@@ -628,8 +628,9 @@ public class TradingController {
         Map<String, Object> matrix = new java.util.HashMap<>();
         for (Map.Entry<String, SymbolState> entry : engine.getSymbolStates().entrySet()) {
             String sym = entry.getKey();
-            if (sym.equals("SENSEX"))
-                continue; // Explicitly hide SENSEX from the left panel/matrix
+            // NOTE: SENSEX is included so the frontend signal engine can read its ST
+            // trends.
+            // The left-panel symbol list still filters it out client-side.
 
             SymbolState state = entry.getValue();
             Map<String, Object> symData = new java.util.HashMap<>();
@@ -644,17 +645,20 @@ public class TradingController {
             }
 
             Map<String, Integer> stTrendByTf = new java.util.HashMap<>();
+            Map<String, Integer> stTrend2ByTf = new java.util.HashMap<>();
             Map<String, Integer> emaBiasByTf = new java.util.HashMap<>();
             for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
                 Candle c = currentCandles.get(tf);
                 if (c != null) {
                     stTrendByTf.put(tf, c.getStTrend());
+                    stTrend2ByTf.put(tf, c.getStTrend2());
                     Double e15 = c.getEma15();
                     Double e15_5 = c.getEma15_5();
                     emaBiasByTf.put(tf, (e15 != null && e15_5 != null) ? (e15 > e15_5 ? 1 : -1) : 0);
                 }
             }
             symData.put("stTrendByTf", stTrendByTf);
+            symData.put("stTrend2ByTf", stTrend2ByTf);
             symData.put("emaBiasByTf", emaBiasByTf);
             symData.put("lastFlipTimes", state.getLastFlipTimes());
             matrix.put(sym, symData);

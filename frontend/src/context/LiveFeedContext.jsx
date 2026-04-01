@@ -84,12 +84,21 @@ export const LiveFeedProvider = ({ children }) => {
 
 export const useLiveFeed = (symbol, interval, onUpdate) => {
     const context = useContext(LiveFeedContext);
+    const callbackRef = useRef(onUpdate);
+
+    // Keep the ref updated with the latest callback logic
+    useEffect(() => {
+        callbackRef.current = onUpdate;
+    }, [onUpdate]);
 
     useEffect(() => {
-        if (!context || !symbol || !interval || !onUpdate) return;
-        const unsubscribe = context.subscribe(symbol, interval, onUpdate);
+        if (!context || !symbol || !interval) return;
+        const stableCallback = (data) => {
+            if (callbackRef.current) callbackRef.current(data);
+        };
+        const unsubscribe = context.subscribe(symbol, interval, stableCallback);
         return () => unsubscribe();
-    }, [context, symbol, interval, onUpdate]);
+    }, [context, symbol, interval]);
 
     return context?.status;
 };
