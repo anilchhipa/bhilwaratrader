@@ -27,14 +27,24 @@ public class Candle {
     private Double stDn2;
     private Integer stTrend2;
 
+    private Double volume;
     private Double delta; // Net Order Flow (Buy Vol - Sell Vol)
 
-    public Candle(double open, double high, double low, double close, LocalDateTime timestamp) {
+    public Candle(double open, double high, double low, double close, double volume, LocalDateTime timestamp) {
         this.open = open;
         this.high = high;
         this.low = low;
         this.close = close;
+        this.volume = volume;
         this.timestamp = timestamp;
+    }
+
+    public Double getVolume() {
+        return volume != null ? volume : 0.0;
+    }
+
+    public void setVolume(Double volume) {
+        this.volume = volume;
     }
 
     public Double getDelta() {

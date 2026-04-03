@@ -104,6 +104,20 @@ public class RedisClient {
         }
     }
 
+    public String get(String key) {
+        if (jedisPool == null) return null;
+        try (Jedis jedis = jedisPool.getResource()) {
+            return jedis.get(key);
+        } catch (Exception e) { return null; }
+    }
+
+    public void setEx(String key, int seconds, String value) {
+        if (jedisPool == null) return;
+        try (Jedis jedis = jedisPool.getResource()) {
+            jedis.setex(key, seconds, value);
+        } catch (Exception e) {}
+    }
+
     public void close() {
         if (jedisPool != null) {
             jedisPool.close();

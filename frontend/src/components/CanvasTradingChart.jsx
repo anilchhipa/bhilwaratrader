@@ -12,11 +12,12 @@ const COLORS = {
 
 const CanvasTradingChart = React.memo(({
     symbol = 'SENSEX', initialInterval = '3min',
-    externalVisibility, onMaximize, isMaximized, symbolPrices
+    externalVisibility, onMaximize, isMaximized, symbolPrices,
+    preloadedData, onIntervalChange // new prop to sync parent state
 }) => {
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         setTimeframe(initialInterval);
@@ -168,32 +169,55 @@ const CanvasTradingChart = React.memo(({
             ctx.stroke();
         });
 
-        // CANDLES with DELTA GLOW
+        // CANDLES with DELTA GLOW and FOOTPRINT MARKERS
         math.slice.forEach((c, i) => {
             const x = math.i2x(math.start + i), isUp = c.close >= c.open;
-
-            // Order Flow Delta Logic: Adjust luminosity based on Delta volume
             const deltaVal = c.delta || 0;
-            const deltaIntensity = Math.min(0.6, Math.abs(deltaVal) / 10000); // Simple normalization
-
             let col = isUp ? COLORS.bull : COLORS.bear;
-            if (deltaVal > 5000 && isUp) col = '#34d399'; // Strong Buy Neon
-            else if (deltaVal < -5000 && !isUp) col = '#f87171'; // Strong Sell Neon
+            if (deltaVal > 5000 && isUp) col = '#34d399';
+            else if (deltaVal < -5000 && !isUp) col = '#f87171';
+
+            // 1. WHALE DETECTION LOGIC (Calculate Avg Volume on the fly)
+            const globalIdx = math.start + i;
+            let totalVol = 0, count = 0;
+            for (let j = Math.max(0, globalIdx - 20); j < globalIdx; j++) {
+                totalVol += (dData[j].volume || dData[j].v || 0); count++;
+            }
+            const avgVol = count > 0 ? totalVol / count : Infinity;
+            const candleVol = (c.volume || c.v || 0);
+            const range = Math.abs(c.high - c.low);
+            const body = Math.abs(c.close - c.open);
+
+            const isWhaleBuy = candleVol > (avgVol * 3) && (body > range * 0.7) && (deltaVal > 0 || (deltaVal === 0 && isUp));
+            const isWhaleSell = candleVol > (avgVol * 3) && (body > range * 0.7) && (deltaVal < 0 || (deltaVal === 0 && !isUp));
 
             // Draw wick
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, math.p2y(c.high)); ctx.lineTo(x, math.p2y(c.low)); ctx.stroke();
 
             // Draw body with potential Glow Effect for High Delta
             ctx.fillStyle = col;
-            if (Math.abs(deltaVal) > 10000) {
-                ctx.shadowBlur = 8; ctx.shadowColor = col;
+            if (Math.abs(deltaVal) > 10000 || isWhaleBuy || isWhaleSell) {
+                ctx.shadowBlur = isWhaleBuy || isWhaleSell ? 15 : 8; ctx.shadowColor = col;
             } else {
                 ctx.shadowBlur = 0;
             }
 
             const bw = Math.max(2, math.bs * 0.8);
             ctx.fillRect(x - bw / 2, Math.min(math.p2y(c.open), math.p2y(c.close)), bw, Math.max(1, Math.abs(math.p2y(c.open) - math.p2y(c.close))));
-            ctx.shadowBlur = 0; // Reset for next candle
+            ctx.shadowBlur = 0;
+
+            // DRAW B/S MARKERS
+            if (isWhaleBuy || isWhaleSell) {
+                ctx.fillStyle = isWhaleBuy ? '#34d399' : '#f87171';
+                ctx.font = 'bold 12px Inter'; ctx.textAlign = 'center';
+                const label = isWhaleBuy ? 'B' : 'S';
+                const yPos = isWhaleBuy ? math.p2y(c.low) + 15 : math.p2y(c.high) - 10;
+                ctx.fillText(label, x, yPos);
+
+                // Extra Pulse Circle
+                ctx.strokeStyle = ctx.fillStyle; ctx.beginPath();
+                ctx.arc(x, yPos - 3, 8, 0, Math.PI * 2); ctx.stroke();
+            }
         });
 
         // Y-AXIS (Compact Sidebar)
@@ -318,20 +342,42 @@ const CanvasTradingChart = React.memo(({
 
     const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
 
+    // Seed chart from WebSocket snapshot delivery (zero REST calls in scanner mode)
+    const snapshotCallback = useCallback((candles) => {
+        if (!candles || candles.length === 0) {
+            setData([]);
+            replayDataRef.current = [];
+            setLoading(false);
+            return;
+        }
+        setData(candles);
+        replayDataRef.current = candles;
+        setLoading(false);
+    }, []);
+
+    // Use preloaded batch data if available, otherwise wait for WS snapshot
+    // Fall back to individual REST fetch only for maximized (full history) view
     useEffect(() => {
+        if (preloadedData && preloadedData.length > 0) {
+            setData(preloadedData);
+            replayDataRef.current = preloadedData;
+            setLoading(false);
+            return;
+        }
+        if (!isMaximized) {
+            // Scanner mode: data will arrive via WebSocket snapshot.
+            // Loading state is initialized to true, snapshotCallback will clear it.
+            setLoading(true);
+            return;
+        }
+        // Maximized mode: fetch full history via REST
         const controller = new AbortController();
         setLoading(true);
-        axios.get(`${API_BASE}/api/history/${symbol}/${interval}?_t=${Date.now()}`, { signal: controller.signal })
-            .then(res => {
-                setData(res.data);
-                replayDataRef.current = res.data;
-                setLoading(false);
-            })
+        axios.get(`${API_BASE}/api/history/${symbol}/${interval}?limit=4000&_t=${Date.now()}`, { signal: controller.signal })
+            .then(res => { setData(res.data); replayDataRef.current = res.data; setLoading(false); })
             .catch(err => { if (!axios.isCancel(err)) { console.error(err); setLoading(false); } });
-
-
         return () => controller.abort();
-    }, [symbol, interval]);
+    }, [symbol, interval, preloadedData, isMaximized]);
     useLiveFeed(symbol, interval, useCallback(u => {
         if (isReplayMode) return;
         setData(p => {
@@ -349,7 +395,7 @@ const CanvasTradingChart = React.memo(({
             }
             return nx;
         });
-    }, [isReplayMode]));
+    }, [isReplayMode]), snapshotCallback);
     useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 250); return () => clearInterval(t); }, [isReplaying]);
     useEffect(() => {
         render();
@@ -370,6 +416,7 @@ const CanvasTradingChart = React.memo(({
         isFollowing.current = false;
         const rect = mainCanvasRef.current.getBoundingClientRect();
         const math = getMath(rect.width, rect.height, dData);
+        if (!math) return; // Guard during lazy-load
         const x = e.clientX - rect.left, y = e.clientY - rect.top;
 
         const hit = orderLines.find(l => Math.abs(math.p2y(l.price) - y) < 10);
@@ -442,6 +489,8 @@ const CanvasTradingChart = React.memo(({
         const x = e.clientX - rect.left, y = e.clientY - rect.top;
         mouseRef.current = { x, y };
         const math = getMath(rect.width, rect.height, dData);
+        if (!math) return; // Guard against still-loading or empty data
+
         if (x > 0 && x < math.cw && y > math.pt && y < math.pt + math.ch) {
             // Mouse is inside chart area
         }
@@ -500,6 +549,7 @@ const CanvasTradingChart = React.memo(({
     const handleBuySell = async (type) => {
         const rect = mainCanvasRef.current.getBoundingClientRect();
         const math = getMath(rect.width, rect.height, dData);
+        if (!math) return; // Guard for modal/empty states
         const midY = math.pt + (math.ch / 2);
         const price = math.y2p(midY);
         const tempId = Date.now();
@@ -523,7 +573,7 @@ const CanvasTradingChart = React.memo(({
                     <span style={{ color: '#cbd5e1', fontSize: '10px', minWidth: '35px' }}>{timeRemaining}</span>
                     <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
                         {(isMaximized ? ['1min', '3min', '5min', '15min'] : []).map(tf => (
-                            <button key={tf} onClick={(e) => { e.stopPropagation(); setTimeframe(tf); }} style={{ background: interval === tf ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>{tf}</button>
+                            <button key={tf} onClick={(e) => { e.stopPropagation(); setTimeframe(tf); if (onIntervalChange) onIntervalChange(tf); }} style={{ background: interval === tf ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>{tf}</button>
                         ))}
                     </div>
                 </div>

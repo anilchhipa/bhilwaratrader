@@ -828,7 +828,7 @@ public class ZerodhaClient {
                         for (HistoricalData d : data.dataArrayList) {
                             LocalDateTime time = LocalDateTime.parse(d.timeStamp,
                                     java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ"));
-                            history.add(new com.algo.core.Candle(d.open, d.high, d.low, d.close, time));
+                            history.add(new com.algo.core.Candle(d.open, d.high, d.low, d.close, d.volume, time));
                         }
                     } else {
                         logger.warn("No data returned for {} in chunk.", instrumentToken);

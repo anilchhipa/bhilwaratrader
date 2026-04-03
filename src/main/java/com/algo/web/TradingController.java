@@ -138,7 +138,8 @@ public class TradingController {
     }
 
     @GetMapping("/history/{symbol}/{interval}")
-    public List<Candle> getHistory(@PathVariable String symbol, @PathVariable String interval) {
+    public List<Candle> getHistory(@PathVariable String symbol, @PathVariable String interval,
+            @RequestParam(required = false) Integer limit) {
         String token = tokenManager.getToken(symbol);
         if (token == null)
             return new ArrayList<>();
@@ -153,12 +154,33 @@ public class TradingController {
             // 5min: 75 x 30 = ~2250
             // 15min: 25 x 30 = ~750
             int candleLimit = 3750; // default for 3min
-            if (interval.equals("1min"))
-                candleLimit = 11250;
-            else if (interval.equals("5min"))
-                candleLimit = 2250;
-            else if (interval.equals("15min"))
-                candleLimit = 750;
+            if (limit != null && limit > 0) {
+                candleLimit = limit;
+            } else {
+                if (interval.equals("1min"))
+                    candleLimit = 11250;
+                else if (interval.equals("5min"))
+                    candleLimit = 2250;
+                else if (interval.equals("15min"))
+                    candleLimit = 750;
+            }
+
+            // Redis Cache Check (for smaller scanner limits)
+            String cacheKey = "history_cache:" + symbol + ":" + dbInterval + ":" + candleLimit;
+            if (candleLimit <= 1000) {
+                String cachedData = redisClient.get(cacheKey);
+                if (cachedData != null) {
+                    try {
+                        return new com.fasterxml.jackson.core.type.TypeReference<List<Candle>>() {
+                        }.getType() == List.class
+                                ? (List<Candle>) new com.fasterxml.jackson.databind.ObjectMapper().readValue(cachedData,
+                                        new com.fasterxml.jackson.core.type.TypeReference<List<Candle>>() {
+                                        })
+                                : null;
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
 
             // Try to fetch from TimescaleDB first
             List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
@@ -201,6 +223,15 @@ public class TradingController {
                 historicalDataService.calculateAndPopulateIndicators(history, symbol, dbInterval);
 
                 logger.debug("Serving {} candles from TimescaleDB for {} ({})", history.size(), symbol, interval);
+
+                // Cache serialized result in Redis for 30s to speed up other monitors
+                if (history != null && candleLimit <= 1000) {
+                    try {
+                        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(history);
+                        redisClient.setEx(cacheKey, 30, json); // 30s TTL
+                    } catch (Exception ignored) {
+                    }
+                }
                 return history;
             }
 
@@ -224,6 +255,28 @@ public class TradingController {
         return new ArrayList<>();
     }
 
+    @SuppressWarnings("unchecked")
+    @PostMapping("/history/batch")
+    public Map<String, List<Candle>> getHistoryBatch(@RequestBody Map<String, Object> req) {
+        List<String> symbols = (List<String>) req.get("symbols");
+        String interval = (String) req.get("interval");
+        Integer limit = req.get("limit") instanceof Number ? ((Number) req.get("limit")).intValue() : null;
+
+        if (symbols == null || interval == null)
+            return new java.util.HashMap<>();
+
+        Map<String, List<Candle>> result = new java.util.concurrent.ConcurrentHashMap<>();
+        symbols.parallelStream().forEach(sym -> {
+            try {
+                List<Candle> h = getHistory(sym, interval, limit);
+                if (h != null && !h.isEmpty())
+                    result.put(sym, h);
+            } catch (Exception ignored) {
+            }
+        });
+        return result;
+    }
+
     private void appendActiveCandle(String symbol, String interval, List<Candle> history) {
         SymbolState state = engine.getState(symbol);
         if (state != null) {
@@ -239,7 +292,7 @@ public class TradingController {
                 if (shouldAppend || shouldReplace) {
                     // Make a copy to avoid mutating the live memory reference while serializing
                     Candle copy = new Candle(active.getOpen(), active.getHigh(), active.getLow(), active.getClose(),
-                            active.getTimestamp());
+                            active.getVolume(), active.getTimestamp());
                     copy.setEma15(active.getEma15());
                     copy.setEma15_5(active.getEma15_5());
                     copy.setEma15_15(active.getEma15_15());

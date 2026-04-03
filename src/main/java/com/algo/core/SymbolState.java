@@ -148,7 +148,8 @@ public class SymbolState {
                 }
             }
 
-            Candle newCandle = new Candle(price, price, price, price, start);
+            double tickQty = Math.abs(delta);
+            Candle newCandle = new Candle(price, price, price, price, tickQty, start);
             newCandle.setDelta(delta); // First tick of new candle
 
             Strategy macroStrategy = strategies.get("15min");
@@ -186,7 +187,9 @@ public class SymbolState {
             current.setLow(Math.min(current.getLow(), price));
             current.setClose(price);
 
-            // Accumulate Delta per tick
+            // Accumulate Volume and Delta per tick
+            double tickQty = Math.abs(delta);
+            current.setVolume(current.getVolume() + tickQty);
             current.setDelta(current.getDelta() + delta);
 
             strategies.get(tf).updateLastCandle(current);

@@ -9,6 +9,7 @@ export const LiveFeedProvider = ({ children }) => {
     const [status, setStatus] = useState('disconnected');
     const stompClientRef = useRef(null);
     const subscriptionsRef = useRef({}); // topic -> { count, subObject, listeners: [] }
+    const snapshotListenersRef = useRef({}); // `${symbol}/${interval}` -> callback
     const [reconnectCount, setReconnectCount] = useState(0);
 
     const connect = useCallback(() => {
@@ -22,7 +23,22 @@ export const LiveFeedProvider = ({ children }) => {
             stompClientRef.current = stomp;
             setStatus('connected');
 
-            // Re-subscribe to all existing topics on reconnection
+            // Subscribe to the personal snapshot queue (session-specific)
+            stomp.subscribe('/user/queue/snapshot', (msg) => {
+                try {
+                    const data = JSON.parse(msg.body);
+                    if (data.type === 'SNAPSHOT' && data.symbol && data.interval) {
+                        const key = `${data.symbol}/${data.interval}`;
+                        const listener = snapshotListenersRef.current[key];
+                        if (listener) {
+                            console.log(`LiveFeed: Snapshot received — ${data.candles?.length} candles for ${key}`);
+                            listener(data.candles);
+                        }
+                    }
+                } catch (e) { console.warn('Snapshot parse error', e); }
+            });
+
+            // Re-subscribe to all existing live-tick topics on reconnection
             Object.keys(subscriptionsRef.current).forEach(topic => {
                 const subEntry = subscriptionsRef.current[topic];
                 subEntry.subObject = stomp.subscribe(topic, (msg) => {
@@ -43,6 +59,13 @@ export const LiveFeedProvider = ({ children }) => {
             if (stompClientRef.current) stompClientRef.current.disconnect();
         };
     }, [reconnectCount, connect]);
+
+    // Register a one-time snapshot listener for a specific symbol/interval
+    const registerSnapshotListener = useCallback((symbol, interval, callback) => {
+        const key = `${symbol}/${interval}`;
+        snapshotListenersRef.current[key] = callback;
+        return () => { delete snapshotListenersRef.current[key]; };
+    }, []);
 
     const subscribe = useCallback((symbol, interval, callback) => {
         const topic = `/topic/updates/${symbol}/${interval}`;
@@ -76,28 +99,37 @@ export const LiveFeedProvider = ({ children }) => {
     }, []);
 
     return (
-        <LiveFeedContext.Provider value={{ subscribe, status }}>
+        <LiveFeedContext.Provider value={{ subscribe, registerSnapshotListener, status }}>
             {children}
         </LiveFeedContext.Provider>
     );
 };
 
-export const useLiveFeed = (symbol, interval, onUpdate) => {
+export const useLiveFeed = (symbol, interval, onUpdate, onSnapshot) => {
     const context = useContext(LiveFeedContext);
     const callbackRef = useRef(onUpdate);
+    const snapshotRef = useRef(onSnapshot);
 
-    // Keep the ref updated with the latest callback logic
-    useEffect(() => {
-        callbackRef.current = onUpdate;
-    }, [onUpdate]);
+    useEffect(() => { callbackRef.current = onUpdate; }, [onUpdate]);
+    useEffect(() => { snapshotRef.current = onSnapshot; }, [onSnapshot]);
 
     useEffect(() => {
         if (!context || !symbol || !interval) return;
+
+        // Register snapshot listener if provided
+        let unregisterSnapshot = () => { };
+        if (context.registerSnapshotListener && snapshotRef.current) {
+            unregisterSnapshot = context.registerSnapshotListener(symbol, interval, (candles) => {
+                if (snapshotRef.current) snapshotRef.current(candles);
+            });
+        }
+
         const stableCallback = (data) => {
             if (callbackRef.current) callbackRef.current(data);
         };
         const unsubscribe = context.subscribe(symbol, interval, stableCallback);
-        return () => unsubscribe();
+
+        return () => { unsubscribe(); unregisterSnapshot(); };
     }, [context, symbol, interval]);
 
     return context?.status;

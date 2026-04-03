@@ -42,6 +42,7 @@ public class TimescaleRepository {
                         "high DOUBLE PRECISION NOT NULL, " +
                         "low DOUBLE PRECISION NOT NULL, " +
                         "close DOUBLE PRECISION NOT NULL, " +
+                        "volume DOUBLE PRECISION NOT NULL DEFAULT 0, " +
                         "ema15 DOUBLE PRECISION, " +
                         "ema15_5 DOUBLE PRECISION, " +
                         "ema15_15 DOUBLE PRECISION, " +
@@ -59,6 +60,13 @@ public class TimescaleRepository {
                         "delta DOUBLE PRECISION, " +
                         "PRIMARY KEY (time, symbol, interval)" +
                         ")");
+
+                // Check and Add volume column if missing (Migration)
+                try {
+                    stmt.execute(
+                            "ALTER TABLE candles ADD COLUMN IF NOT EXISTS volume DOUBLE PRECISION NOT NULL DEFAULT 0");
+                } catch (SQLException e) {
+                }
 
                 // Check and Add delta column if missing (Migration)
                 try {
@@ -133,13 +141,13 @@ public class TimescaleRepository {
             return 0;
         }
 
-        String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, " +
+        String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
                 "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
-                "close = EXCLUDED.close, " +
+                "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
                 "ema15 = EXCLUDED.ema15, ema15_5 = EXCLUDED.ema15_5, ema15_15 = EXCLUDED.ema15_15, " +
                 "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_15_15_15 = EXCLUDED.ema15_15_15_15, ema15_15_15_15_30 = EXCLUDED.ema15_15_15_15_30, "
                 +
@@ -170,23 +178,24 @@ public class TimescaleRepository {
                     pstmt.setDouble(5, candle.getHigh());
                     pstmt.setDouble(6, candle.getLow());
                     pstmt.setDouble(7, candle.getClose());
+                    pstmt.setDouble(8, candle.getVolume());
 
-                    // Indicators (nullable)
-                    setDoubleOrNull(pstmt, 8, candle.getEma15());
-                    setDoubleOrNull(pstmt, 9, candle.getEma15_5());
-                    setDoubleOrNull(pstmt, 10, candle.getEma15_15());
-                    setDoubleOrNull(pstmt, 11, candle.getEma15_15_15());
-                    setDoubleOrNull(pstmt, 12, candle.getEma15_15_15_15());
-                    setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15_30());
-                    setDoubleOrNull(pstmt, 14, candle.getStMa());
-                    setDoubleOrNull(pstmt, 15, candle.getStUp());
-                    setDoubleOrNull(pstmt, 16, candle.getStDn());
-                    setIntegerOrNull(pstmt, 17, candle.getStTrend());
-                    setDoubleOrNull(pstmt, 18, candle.getStMa2());
-                    setDoubleOrNull(pstmt, 19, candle.getStUp2());
-                    setDoubleOrNull(pstmt, 20, candle.getStDn2());
-                    setIntegerOrNull(pstmt, 21, candle.getStTrend2());
-                    setDoubleOrNull(pstmt, 22, candle.getDelta());
+                    // Indicators (nullable) - Shifting indices by 1
+                    setDoubleOrNull(pstmt, 9, candle.getEma15());
+                    setDoubleOrNull(pstmt, 10, candle.getEma15_5());
+                    setDoubleOrNull(pstmt, 11, candle.getEma15_15());
+                    setDoubleOrNull(pstmt, 12, candle.getEma15_15_15());
+                    setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15());
+                    setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30());
+                    setDoubleOrNull(pstmt, 15, candle.getStMa());
+                    setDoubleOrNull(pstmt, 16, candle.getStUp());
+                    setDoubleOrNull(pstmt, 17, candle.getStDn());
+                    setIntegerOrNull(pstmt, 18, candle.getStTrend());
+                    setDoubleOrNull(pstmt, 19, candle.getStMa2());
+                    setDoubleOrNull(pstmt, 20, candle.getStUp2());
+                    setDoubleOrNull(pstmt, 21, candle.getStDn2());
+                    setIntegerOrNull(pstmt, 22, candle.getStTrend2());
+                    setDoubleOrNull(pstmt, 23, candle.getDelta());
 
                     pstmt.addBatch();
                 }
@@ -227,7 +236,7 @@ public class TimescaleRepository {
      */
     public List<Candle> getLatestCandles(String symbol, String interval, int count) {
         List<Candle> candles = new ArrayList<>();
-        String sql = "SELECT time, open, high, low, close, " +
+        String sql = "SELECT time, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
                 "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta " +
                 "FROM candles " +
@@ -253,6 +262,7 @@ public class TimescaleRepository {
                             rs.getDouble("high"),
                             rs.getDouble("low"),
                             rs.getDouble("close"),
+                            rs.getDouble("volume"),
                             rs.getTimestamp("time").toLocalDateTime());
 
                     // Load indicators

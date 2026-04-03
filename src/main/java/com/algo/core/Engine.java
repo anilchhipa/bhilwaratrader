@@ -163,6 +163,7 @@ public class Engine {
                     .put("l", candle.getLow())
                     .put("c", candle.getClose())
                     .put("d", candle.getDelta())
+                    .put("v", candle.getVolume())
                     .put("t", candle.getTimestamp().format(ISO_FORMATTER));
 
             Map<String, Double> indicators = state.getIndicatorValues().get(interval);
