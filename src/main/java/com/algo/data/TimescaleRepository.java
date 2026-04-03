@@ -56,8 +56,16 @@ public class TimescaleRepository {
                         "st_up2 DOUBLE PRECISION, " +
                         "st_dn2 DOUBLE PRECISION, " +
                         "st_trend2 INTEGER, " +
+                        "delta DOUBLE PRECISION, " +
                         "PRIMARY KEY (time, symbol, interval)" +
                         ")");
+
+                // Check and Add delta column if missing (Migration)
+                try {
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS delta DOUBLE PRECISION");
+                } catch (SQLException e) {
+                    // Column might already exist
+                }
 
                 // Convert to hypertable (catch error if already hypertable)
                 try {
@@ -127,8 +135,8 @@ public class TimescaleRepository {
 
         String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
                 "close = EXCLUDED.close, " +
@@ -137,7 +145,9 @@ public class TimescaleRepository {
                 +
                 "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, "
                 +
-                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2";
+                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, "
+                +
+                "delta = EXCLUDED.delta";
 
         int savedCount = 0;
         Connection conn = null;
@@ -176,6 +186,7 @@ public class TimescaleRepository {
                     setDoubleOrNull(pstmt, 19, candle.getStUp2());
                     setDoubleOrNull(pstmt, 20, candle.getStDn2());
                     setIntegerOrNull(pstmt, 21, candle.getStTrend2());
+                    setDoubleOrNull(pstmt, 22, candle.getDelta());
 
                     pstmt.addBatch();
                 }
@@ -218,7 +229,7 @@ public class TimescaleRepository {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2 " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta " +
                 "FROM candles " +
                 "WHERE symbol = ? AND interval = ? " +
                 "ORDER BY time DESC " +
@@ -261,6 +272,7 @@ public class TimescaleRepository {
                     candle.setStUp2(getDoubleOrNull(rs, "st_up2"));
                     candle.setStDn2(getDoubleOrNull(rs, "st_dn2"));
                     candle.setStTrend2(getIntegerOrNull(rs, "st_trend2"));
+                    candle.setDelta(getDoubleOrNull(rs, "delta"));
 
                     candles.add(candle);
                 }

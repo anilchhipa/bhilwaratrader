@@ -15,6 +15,10 @@ function App() {
   const [selectedSymbol, setSelectedSymbol] = useState('RELIANCE');
   const [trackedSymbols, setTrackedSymbols] = useState([]);
   const [maximizedTf, setMaximizedTf] = useState(null);
+  const [viewMode, setViewMode] = useState('focus'); // 'focus' or 'scanner'
+  const [scannerPage, setScannerPage] = useState(0);
+  const [scannerCategory, setScannerCategory] = useState('STOCKS');
+  const [scannerTf, setScannerTf] = useState('3min');
   const [symbolPrices, setSymbolPrices] = useState({});
   const [backendReady, setBackendReady] = useState(false);
   const [showReadyPopup, setShowReadyPopup] = useState(false);
@@ -168,6 +172,35 @@ function App() {
     { sym: 'SENSEX', tf: '1min' },
   ], [selectedSymbol]);
 
+  const totalScannerPages = Math.ceil(trackedSymbols.filter(s => s !== 'SENSEX').length / 8);
+
+  const scannerCategories = useMemo(() => {
+    const list = trackedSymbols.filter(s => s !== 'SENSEX');
+    const stocks = [], futures = [], calls = [], puts = [];
+
+    list.forEach(s => {
+      if (s.endsWith('FUT')) futures.push(s);
+      else if (/\d+[CP]E$/.test(s)) {
+        if (s.endsWith('CE')) calls.push(s);
+        else puts.push(s);
+      } else stocks.push(s);
+    });
+
+    return { STOCKS: stocks, FUTURES: futures, CALLS: calls, PUTS: puts };
+  }, [trackedSymbols]);
+
+  const scannerSlots = useMemo(() => {
+    const list = scannerCategories[scannerCategory] || [];
+    const start = scannerPage * 8;
+    const chunk = list.slice(start, start + 8);
+    return chunk.map(s => ({ sym: s, tf: scannerTf }));
+  }, [scannerCategories, scannerCategory, scannerPage, scannerTf]);
+
+  const categoryTotalPages = useMemo(() => {
+    const list = scannerCategories[scannerCategory] || [];
+    return Math.max(1, Math.ceil(list.length / 8));
+  }, [scannerCategories, scannerCategory]);
+
   return (
     <LiveFeedProvider>
       <div className="app-container">
@@ -181,6 +214,8 @@ function App() {
             symbolPrices={symbolPrices}
             toggleWidget={toggleWidget}
             activeWidgets={activeWidgets}
+            viewMode={viewMode}
+            setViewMode={setViewMode}
           />
           <main className="chart-section">
             {maximizedTf ? (
@@ -197,6 +232,65 @@ function App() {
                   themeColors={themeColors}
                   symbolPrices={symbolPrices}
                 />
+              </div>
+            ) : viewMode === 'scanner' ? (
+              <div className="scanner-view-container">
+                <div className="scanner-header">
+                  <div className="scanner-info">
+                    <span className="scanner-pill">{scannerTf.toUpperCase()} SCANNER</span>
+                    <div className="scanner-tf-selector">
+                      {['1min', '3min', '5min', '15min'].map(tf => (
+                        <button
+                          key={tf}
+                          className={`tf-tab ${scannerTf === tf ? 'active' : ''}`}
+                          onClick={() => setScannerTf(tf)}
+                        >
+                          {tf === '1min' ? '1M' : tf === '3min' ? '3M' : tf === '5min' ? '5M' : '15M'}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="scanner-category-tabs">
+                      {Object.keys(scannerCategories).map(cat => (
+                        <button
+                          key={cat}
+                          className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
+                          onClick={() => { setScannerCategory(cat); setScannerPage(0); }}
+                        >
+                          {cat} ({scannerCategories[cat].length})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="scanner-nav">
+                    <span className="scanner-page-indicator">PAGE {scannerPage + 1} / {categoryTotalPages}</span>
+                    <button className="nav-btn" onClick={() => setScannerPage(p => Math.max(0, p - 1))} disabled={scannerPage === 0} title="Previous Page">◀</button>
+                    <button className="nav-btn" onClick={() => setScannerPage(p => Math.min(categoryTotalPages - 1, p + 1))} disabled={scannerPage >= categoryTotalPages - 1} title="Next Page">▶</button>
+                    <button className="nav-close" onClick={() => setViewMode('focus')} title="Exit Scanner">✕</button>
+                  </div>
+                </div>
+                <div className="charts-grid matrix-2x4">
+                  {scannerSlots.map((slot, idx) => (
+                    <div key={`${slot.sym}-${idx}`} className="grid-chart-item">
+                      <CanvasTradingChart
+                        symbol={slot.sym}
+                        initialInterval={scannerTf}
+                        isGrid={true}
+                        externalVisibility={visibility}
+                        onVisibilityUpdate={setVisibility}
+                        onMaximize={handleMaximize}
+                        isMaximized={false}
+                        onPriceUpdate={handlePriceUpdate}
+                        themeColors={themeColors}
+                        symbolPrices={symbolPrices}
+                      />
+                    </div>
+                  ))}
+                  {Array.from({ length: Math.max(0, 8 - scannerSlots.length) }).map((_, i) => (
+                    <div key={`empty-${i}`} className="grid-chart-item empty-slot">
+                      <div className="empty-slot-content">CHART {scannerSlots.length + i + 1}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="charts-grid matrix-2x4">

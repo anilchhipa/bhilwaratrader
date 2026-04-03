@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS candles (
     signal_line DOUBLE PRECISION,
     macd_5 DOUBLE PRECISION,
     macd_5_5 DOUBLE PRECISION,
+    delta DOUBLE PRECISION,
     PRIMARY KEY (time, symbol, interval)
 );
 

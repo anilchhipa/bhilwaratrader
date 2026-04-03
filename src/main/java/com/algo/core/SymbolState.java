@@ -59,9 +59,9 @@ public class SymbolState {
         }
     }
 
-    public synchronized void update(double price, java.time.LocalDateTime time) {
+    public synchronized void update(double price, double delta, java.time.LocalDateTime time) {
         for (String tf : timeframes) {
-            updateTimeframe(tf, price, time);
+            updateTimeframe(tf, price, delta, time);
         }
     }
 
@@ -135,7 +135,7 @@ public class SymbolState {
         }
     }
 
-    private void updateTimeframe(String tf, double price, java.time.LocalDateTime time) {
+    private void updateTimeframe(String tf, double price, double delta, java.time.LocalDateTime time) {
         java.time.LocalDateTime start = getIntervalStartTime(time, tf);
         Candle current = currentCandles.get(tf);
 
@@ -144,20 +144,15 @@ public class SymbolState {
             if (current != null) {
                 lastStablePrices.put(tf, current.getClose());
                 if (onCandleComplete != null) {
-                    // Emit the completed candle immediately
                     onCandleComplete.onComplete(this.symbol, tf, current);
                 }
             }
 
             Candle newCandle = new Candle(price, price, price, price, start);
+            newCandle.setDelta(delta); // First tick of new candle
 
-            // Get the bias from the 15min "Compass" chart
             Strategy macroStrategy = strategies.get("15min");
-            // If we are updating the 15m chart itself, we pass a special value (999) to
-            // bypass the filter
             int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
-
-            // Update Strategy (New Candle Mode) with MTF filtering
             strategies.get(tf).onNewCandle(current, newCandle, macroBias);
 
             // Confirmed Trend Flip Detection (only on candle close)
@@ -177,11 +172,6 @@ public class SymbolState {
             current = newCandle;
             currentCandles.put(tf, current);
         } else {
-            // Price Spike Filter: Ignore ticks that deviate more than 50% from the last
-            // closed
-            // candle's price.
-            // This prevents "random fluctuations" (bad ticks) from permanently skewing
-            // High/Low.
             Double stablePrice = lastStablePrices.get(tf);
             if (stablePrice != null && stablePrice > 0) {
                 double deviation = Math.abs(price - stablePrice) / stablePrice;
@@ -192,17 +182,16 @@ public class SymbolState {
                 }
             }
 
-            // Update existing candle
             current.setHigh(Math.max(current.getHigh(), price));
             current.setLow(Math.min(current.getLow(), price));
             current.setClose(price);
 
-            // Update Strategy (Live Update Mode)
+            // Accumulate Delta per tick
+            current.setDelta(current.getDelta() + delta);
+
             strategies.get(tf).updateLastCandle(current);
         }
 
-        // Pull indicators from Strategy into the indicatorValues map for
-        // API/Broadcasting
         updateIndicatorMap(tf, current);
     }
 

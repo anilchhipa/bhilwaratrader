@@ -17,6 +17,10 @@ const CanvasTradingChart = React.memo(({
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        setTimeframe(initialInterval);
+    }, [initialInterval]);
     const vis = externalVisibility || { EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true, EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true };
 
     const [isReplayMode, setIsReplayMode] = useState(false);
@@ -164,12 +168,32 @@ const CanvasTradingChart = React.memo(({
             ctx.stroke();
         });
 
-        // CANDLES
+        // CANDLES with DELTA GLOW
         math.slice.forEach((c, i) => {
-            const x = math.i2x(math.start + i), isUp = c.close >= c.open, col = isUp ? COLORS.bull : COLORS.bear;
+            const x = math.i2x(math.start + i), isUp = c.close >= c.open;
+
+            // Order Flow Delta Logic: Adjust luminosity based on Delta volume
+            const deltaVal = c.delta || 0;
+            const deltaIntensity = Math.min(0.6, Math.abs(deltaVal) / 10000); // Simple normalization
+
+            let col = isUp ? COLORS.bull : COLORS.bear;
+            if (deltaVal > 5000 && isUp) col = '#34d399'; // Strong Buy Neon
+            else if (deltaVal < -5000 && !isUp) col = '#f87171'; // Strong Sell Neon
+
+            // Draw wick
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, math.p2y(c.high)); ctx.lineTo(x, math.p2y(c.low)); ctx.stroke();
-            ctx.fillStyle = col; const bw = Math.max(2, math.bs * 0.8);
+
+            // Draw body with potential Glow Effect for High Delta
+            ctx.fillStyle = col;
+            if (Math.abs(deltaVal) > 10000) {
+                ctx.shadowBlur = 8; ctx.shadowColor = col;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            const bw = Math.max(2, math.bs * 0.8);
             ctx.fillRect(x - bw / 2, Math.min(math.p2y(c.open), math.p2y(c.close)), bw, Math.max(1, Math.abs(math.p2y(c.open) - math.p2y(c.close))));
+            ctx.shadowBlur = 0; // Reset for next candle
         });
 
         // Y-AXIS (Compact Sidebar)
@@ -186,6 +210,18 @@ const CanvasTradingChart = React.memo(({
 
         // X-AXIS
         ctx.fillStyle = '#0a0f1d'; ctx.fillRect(0, math.pt + math.ch, math.cw + math.pr, 20);
+
+        // DELTA HISTOGRAM (At the footer of chart)
+        math.slice.forEach((c, i) => {
+            const x = math.i2x(math.start + i), d = c.delta || 0;
+            if (d === 0) return;
+            const hScale = Math.min(15, Math.abs(d) / 5000);
+            ctx.fillStyle = d > 0 ? '#34d399' : '#f87171'; // Green/Red
+            const bw = Math.max(1, math.bs * 0.5);
+            const y = math.pt + math.ch - (d > 0 ? hScale : 0);
+            ctx.fillRect(x - bw / 2, y, bw, hScale);
+        });
+
         ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'center';
         const barsPerLabel = Math.max(1, Math.floor(visibleBars / 6));
         math.slice.forEach((c, i) => {
@@ -302,7 +338,8 @@ const CanvasTradingChart = React.memo(({
             const f = {
                 ...u.ohlc, ...u.indicators,
                 timestamp: u.ohlc.t,
-                open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c
+                open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c,
+                delta: u.ohlc.d
             };
             const nx = [...p];
             if (nx.length && nx[nx.length - 1].timestamp === f.timestamp) {

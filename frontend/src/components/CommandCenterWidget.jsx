@@ -8,7 +8,9 @@ export default function CommandCenterWidget({
     onSymbolSelect,
     symbolPrices,
     toggleWidget,
-    activeWidgets
+    activeWidgets,
+    viewMode,
+    setViewMode
 }) {
     if (!isOpen) return null;
 
@@ -20,6 +22,13 @@ export default function CommandCenterWidget({
                     <span style={{ color: '#fbbf24' }}>Room</span>
                 </h3>
                 <div className="header-actions">
+                    <button
+                        className={`icon-action-btn ${viewMode === 'scanner' ? 'active' : ''}`}
+                        onClick={() => setViewMode(prev => prev === 'focus' ? 'scanner' : 'focus')}
+                        title="Toggle Multi-Chart Scanner"
+                    >
+                        📟
+                    </button>
                     <button
                         className={`icon-action-btn ${activeWidgets?.indicators ? 'active' : ''}`}
                         onClick={() => toggleWidget('indicators')}

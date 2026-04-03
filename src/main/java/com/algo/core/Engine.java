@@ -124,7 +124,7 @@ public class Engine {
         }
     }
 
-    public void onTick(String token, double price) {
+    public void onTick(String token, double price, double delta) {
         if (!MarketUtils.isMarketOpen()) {
             return;
         }
@@ -136,7 +136,7 @@ public class Engine {
 
         SymbolState state = symbolStates.get(symbol);
         if (state != null) {
-            state.update(price, LocalDateTime.now());
+            state.update(price, delta, LocalDateTime.now());
 
             long now = System.currentTimeMillis();
             long lastQueue = lastTickQueueTime.getOrDefault(symbol, 0L);
@@ -162,6 +162,7 @@ public class Engine {
                     .put("h", candle.getHigh())
                     .put("l", candle.getLow())
                     .put("c", candle.getClose())
+                    .put("d", candle.getDelta())
                     .put("t", candle.getTimestamp().format(ISO_FORMATTER));
 
             Map<String, Double> indicators = state.getIndicatorValues().get(interval);
