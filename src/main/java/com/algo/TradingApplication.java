@@ -128,10 +128,17 @@ public class TradingApplication {
 
                 // Internal Force-Add: Ensure SENSEX index is always registered for charts
                 // even if not in the DB watchlist.
+                // Internal Force-Add: Ensure SENSEX & NIFTY indices are always registered for
+                // charts
                 if (tokenManager.getToken("SENSEX") == null) {
                     System.out.println("Auto-registering SENSEX internal index...");
                     tokenManager.register("SENSEX", "BSE");
                     engine.registerSymbol("SENSEX");
+                }
+                if (tokenManager.getToken("NIFTY 50") == null) {
+                    System.out.println("Auto-registering NIFTY 50 internal index...");
+                    tokenManager.register("NIFTY 50", "NSE");
+                    engine.registerSymbol("NIFTY 50");
                 }
 
                 // 1. Login

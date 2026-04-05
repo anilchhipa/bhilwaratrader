@@ -833,8 +833,18 @@ public class ZerodhaClient {
                     } else {
                         logger.warn("No data returned for {} in chunk.", instrumentToken);
                     }
-                } catch (KiteException | org.json.JSONException e) {
-                    logger.error("API call failed for {}: {}", instrumentToken, e.getMessage());
+                } catch (KiteException e) {
+                    logger.error("Kite API Error [Code: {}] for {}: {}", e.code, instrumentToken,
+                            e.message != null ? e.message : e.toString());
+                    if (e.code == 403) {
+                        logger.error(
+                                "  -> CRITICAL: Historical Data API is likely NOT ENABLED for this Zerodha API Key (it is a paid addon).");
+                    }
+                } catch (org.json.JSONException e) {
+                    logger.error("JSON Parsing Error for {}: {}. Response might be empty or malformed.",
+                            instrumentToken, e.toString());
+                } catch (Exception e) {
+                    logger.error("Unexpected Error for {}: {}", instrumentToken, e.toString());
                 }
 
                 currentFrom = currentTo;

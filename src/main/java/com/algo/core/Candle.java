@@ -29,6 +29,7 @@ public class Candle {
 
     private Double volume;
     private Double delta; // Net Order Flow (Buy Vol - Sell Vol)
+    private Integer whaleSignal; // 1 = Whale Buy, -1 = Whale Sell/Fear
 
     public Candle(double open, double high, double low, double close, double volume, LocalDateTime timestamp) {
         this.open = open;
@@ -206,6 +207,14 @@ public class Candle {
 
     public void setStTrend2(Integer stTrend2) {
         this.stTrend2 = stTrend2;
+    }
+
+    public Integer getWhaleSignal() {
+        return whaleSignal != null ? whaleSignal : 0;
+    }
+
+    public void setWhaleSignal(Integer whaleSignal) {
+        this.whaleSignal = whaleSignal;
     }
 
 }

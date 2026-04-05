@@ -1,12 +1,14 @@
 #!/bin/bash
 # ─────────────────────────────────────────────
 #  Algo Trading Bot - Start Script
-#  Runs with ZGC (low-latency GC) by default
+#  Runs with Oracle GraalVM (high-performance runtime)
 # ─────────────────────────────────────────────
 
+export JAVA_HOME="/home/anil-chhipa/graalvm"
+export PATH="$JAVA_HOME/bin:$PATH"
 JAR="target/trading-algo-1.0-SNAPSHOT.jar"
 
-echo "Building latest changes..."
+echo "Building latest changes with GraalVM..."
 mvn clean package -DskipTests -q
 
 if [ ! -f "$JAR" ]; then

@@ -10,11 +10,7 @@ const COLORS = {
     stBull: 'rgba(0, 98, 255, 0.35)', stBear: 'rgba(239, 68, 68, 0.35)', st2: 'rgba(168,85,247,0.1)'
 };
 
-const CanvasTradingChart = React.memo(({
-    symbol = 'SENSEX', initialInterval = '3min',
-    externalVisibility, onMaximize, isMaximized, symbolPrices,
-    preloadedData, onIntervalChange // new prop to sync parent state
-}) => {
+const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGrid = false, isMaximized = false, onMaximize, onPriceUpdate, externalVisibility, onVisibilityUpdate, onIntervalChange, themeColors, symbolPrices, hideMaximize = false, preloadedData, isHighlighted = false }) => {
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
     const [loading, setLoading] = useState(true);
@@ -137,6 +133,34 @@ const CanvasTradingChart = React.memo(({
         for (let i = 1; i < 9; i++) { const y = math.pt + (math.ch / 8) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke(); }
         for (let i = 1; i < 10; i++) { const x = (math.cw / 10) * i; ctx.beginPath(); ctx.moveTo(x, math.pt); ctx.lineTo(x, math.pt + math.ch); ctx.stroke(); }
 
+        // BACKGROUND WATERMARK (Brand Themed - Vibrant Signature)
+        ctx.save();
+        const fontSize = isMaximized ? 14 : (isGrid ? 8 : 10);
+
+        ctx.font = `300 ${fontSize}px Inter`;
+        const tw = ctx.measureText(' Trader').width;
+        ctx.font = `900 ${fontSize}px Inter`;
+        const bw = ctx.measureText('Bhilwara').width;
+
+        const x = math.cw - 8 - (bw + tw);
+        const y = math.pt + math.ch - 8;
+        ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+
+        // Visibility Shadow (Dark contrast)
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
+
+        // "Bhilwara" Part
+        ctx.font = `900 ${fontSize}px Inter`;
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText('Bhilwara', x, y);
+
+        // "Trader" Part
+        ctx.font = `300 ${fontSize}px Inter`;
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText(' Trader', x + bw, y);
+        ctx.restore();
+
         // CLOUDS (Segmented Rendering to prevent overlapping gaps)
         const drawCloud = (trendKey, maKey, col, colDown) => {
             let lastTrend = null, segment = [];
@@ -177,19 +201,27 @@ const CanvasTradingChart = React.memo(({
             if (deltaVal > 5000 && isUp) col = '#34d399';
             else if (deltaVal < -5000 && !isUp) col = '#f87171';
 
-            // 1. WHALE DETECTION LOGIC (Calculate Avg Volume on the fly)
-            const globalIdx = math.start + i;
-            let totalVol = 0, count = 0;
-            for (let j = Math.max(0, globalIdx - 20); j < globalIdx; j++) {
-                totalVol += (dData[j].volume || dData[j].v || 0); count++;
-            }
-            const avgVol = count > 0 ? totalVol / count : Infinity;
-            const candleVol = (c.volume || c.v || 0);
-            const range = Math.abs(c.high - c.low);
-            const body = Math.abs(c.close - c.open);
+            // 1. WHALE DETECTION (Backend-driven Phase 2 Signaling)
+            const whaleSig = c.whaleSignal || 0;
+            let isWhaleBuy = whaleSig === 1;
+            let isWhaleSell = whaleSig === -1;
 
-            const isWhaleBuy = candleVol > (avgVol * 3) && (body > range * 0.7) && (deltaVal > 0 || (deltaVal === 0 && isUp));
-            const isWhaleSell = candleVol > (avgVol * 3) && (body > range * 0.7) && (deltaVal < 0 || (deltaVal === 0 && !isUp));
+            if (whaleSig === 0) {
+                // Fallback: Legacy client-side detection (used if backend signal is missing)
+                const globalIdx = math.start + i;
+                let totalVol = 0, count = 0;
+                for (let j = Math.max(0, globalIdx - 20); j < globalIdx; j++) {
+                    totalVol += (dData[j].volume || dData[j].v || 0); count++;
+                }
+                const avgVol = count > 0 ? totalVol / count : Infinity;
+                const candleVol = (c.volume || c.v || 0);
+                const range = Math.max(0.0001, Math.abs(c.high - c.low));
+                const body = Math.abs(c.close - c.open);
+                if (candleVol > (avgVol * 3) && (body > range * 0.8)) {
+                    if (deltaVal > 0 || (deltaVal === 0 && isUp)) isWhaleBuy = true;
+                    else if (deltaVal < -0 || (deltaVal === 0 && !isUp)) isWhaleSell = true;
+                }
+            }
 
             // Draw wick
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, math.p2y(c.high)); ctx.lineTo(x, math.p2y(c.low)); ctx.stroke();
@@ -364,19 +396,20 @@ const CanvasTradingChart = React.memo(({
             setLoading(false);
             return;
         }
-        if (!isMaximized) {
-            // Scanner mode: data will arrive via WebSocket snapshot.
-            // Loading state is initialized to true, snapshotCallback will clear it.
+
+        // Maximized mode OR special reference anchors (NIFTY/SENSEX): fetch history via REST
+        const isAnchor = (symbol === 'NIFTY 50' || symbol === 'SENSEX');
+        if (isMaximized || isAnchor) {
+            const controller = new AbortController();
             setLoading(true);
-            return;
+            axios.get(`${API_BASE}/api/history/${symbol}/${interval}?limit=4000&_t=${Date.now()}`, { signal: controller.signal })
+                .then(res => { setData(res.data); replayDataRef.current = res.data; setLoading(false); })
+                .catch(err => { if (!axios.isCancel(err)) { console.error(err); setLoading(false); } });
+            return () => controller.abort();
         }
-        // Maximized mode: fetch full history via REST
-        const controller = new AbortController();
+
+        // Normal Scanner mode: data will arrive via WebSocket snapshot (handled by useLiveFeed callback)
         setLoading(true);
-        axios.get(`${API_BASE}/api/history/${symbol}/${interval}?limit=4000&_t=${Date.now()}`, { signal: controller.signal })
-            .then(res => { setData(res.data); replayDataRef.current = res.data; setLoading(false); })
-            .catch(err => { if (!axios.isCancel(err)) { console.error(err); setLoading(false); } });
-        return () => controller.abort();
     }, [symbol, interval, preloadedData, isMaximized]);
     useLiveFeed(symbol, interval, useCallback(u => {
         if (isReplayMode) return;
@@ -564,7 +597,7 @@ const CanvasTradingChart = React.memo(({
     };
 
     return (
-        <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', background: COLORS.bg, overflow: 'hidden', borderRadius: 'inherit' }}
+        <div ref={containerRef} className={`trading-canvas-wrapper ${isHighlighted ? 'glow-highlight' : ''}`} style={{ width: '100%', height: '100%', position: 'relative', background: COLORS.bg, overflow: 'hidden', borderRadius: 'inherit' }}
             onWheel={e => { e.preventDefault(); setVisibleBars(p => Math.max(20, Math.min(800, p + (e.deltaY > 0 ? 8 : -8)))); }}
             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); }}>
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '26px', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(15,23,42,0.95)', padding: '0 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)' }}>
@@ -590,7 +623,9 @@ const CanvasTradingChart = React.memo(({
                         <button onClick={() => handleBuySell('BUY')} style={{ background: '#059669', color: '#fff', border: 'none', fontSize: '10px', fontWeight: 'bold', height: '18px', padding: '0 8px', borderRadius: '2px', cursor: 'pointer' }}>BL</button>
                         <button onClick={() => handleBuySell('SELL')} style={{ background: '#dc2626', color: '#fff', border: 'none', fontSize: '10px', fontWeight: 'bold', height: '18px', padding: '0 8px', borderRadius: '2px', cursor: 'pointer' }}>SL</button>
                         <button onClick={() => { setYRange(null); scrollOffset.current = 0; isFollowing.current = true; render(); }} title="Reset Chart" style={{ background: '#1e293b', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>↺</button>
-                        <button onClick={() => onMaximize(interval)} title={isMaximized ? "Exit Maximize" : "Maximize"} style={{ background: isMaximized ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>{isMaximized ? '↙' : '⛶'}</button>
+                        {!hideMaximize && (
+                            <button onClick={() => onMaximize(interval)} title={isMaximized ? "Exit Maximize" : "Maximize"} style={{ background: isMaximized ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>{isMaximized ? '↙' : '⛶'}</button>
+                        )}
                     </div>
                 </div>
             </div>

@@ -15,6 +15,10 @@ public class SymbolState {
     private final String symbol;
     private final String[] timeframes = { "1min", "3min", "5min", "15min" };
 
+    // Timeframe -> List of historical Candles (The "Hot Buffer")
+    private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
+    private static final int MAX_HOT_CANDLES = 1000;
+
     // Timeframe -> Candle
     private final Map<String, Candle> currentCandles = new ConcurrentHashMap<>();
 
@@ -56,6 +60,7 @@ public class SymbolState {
         for (String tf : timeframes) {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
             strategies.put(tf, new Strategy(indicatorConfig));
+            historyBuffers.put(tf, java.util.Collections.synchronizedList(new java.util.ArrayList<>()));
         }
     }
 
@@ -133,6 +138,14 @@ public class SymbolState {
                 lastFlipTimes.put(tf, historicalCandles.get(0).getTimestamp());
             }
         }
+        // Hydrate the RAM buffer
+        java.util.List<Candle> buffer = historyBuffers.get(tf);
+        if (buffer != null) {
+            synchronized (buffer) {
+                buffer.clear();
+                buffer.addAll(historicalCandles);
+            }
+        }
     }
 
     private void updateTimeframe(String tf, double price, double delta, java.time.LocalDateTime time) {
@@ -143,6 +156,18 @@ public class SymbolState {
             // New Candle Started
             if (current != null) {
                 lastStablePrices.put(tf, current.getClose());
+
+                // ADD COMPLETED CANDLE TO RAM BUFFER
+                java.util.List<Candle> buffer = historyBuffers.get(tf);
+                if (buffer != null) {
+                    synchronized (buffer) {
+                        buffer.add(current);
+                        if (buffer.size() > MAX_HOT_CANDLES) {
+                            buffer.remove(0);
+                        }
+                    }
+                }
+
                 if (onCandleComplete != null) {
                     onCandleComplete.onComplete(this.symbol, tf, current);
                 }
@@ -286,5 +311,18 @@ public class SymbolState {
 
     public Map<String, java.time.LocalDateTime> getLastFlipTimes() {
         return lastFlipTimes;
+    }
+
+    /**
+     * The heart of "Hot Charts": Returns the full history for a timeframe directly
+     * from RAM.
+     */
+    public java.util.List<Candle> getHistory(String timeframe) {
+        java.util.List<Candle> buffer = historyBuffers.get(timeframe);
+        if (buffer == null)
+            return java.util.Collections.emptyList();
+        synchronized (buffer) {
+            return new java.util.ArrayList<>(buffer);
+        }
     }
 }

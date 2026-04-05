@@ -148,11 +148,20 @@ public class TradingController {
         String dbInterval = interval; // 1min, 3min, 5min, etc.
 
         try {
-            // Dynamic limit: give enough candles for ~30 trading days per timeframe
-            // 1min: 375 candles/day x 30 days = ~11250
-            // 3min: 125 x 30 = ~3750
-            // 5min: 75 x 30 = ~2250
-            // 15min: 25 x 30 = ~750
+            // Hot RAM Buffer Check: The fastest path (0ms)
+            SymbolState state = engine.getState(symbol);
+            if (state != null) {
+                List<Candle> ramHistory = state.getHistory(interval);
+                if (!ramHistory.isEmpty() && (limit == null || ramHistory.size() >= limit)) {
+                    // If RAM has enough data, return it immediately
+                    if (limit != null && ramHistory.size() > limit) {
+                        return ramHistory.subList(ramHistory.size() - limit, ramHistory.size());
+                    }
+                    return ramHistory;
+                }
+            }
+
+            // Dynamic limit calculation
             int candleLimit = 3750; // default for 3min
             if (limit != null && limit > 0) {
                 candleLimit = limit;
@@ -182,7 +191,7 @@ public class TradingController {
                 }
             }
 
-            // Try to fetch from TimescaleDB first
+            // Try to fetch from TimescaleDB (Disk fallback)
             List<Candle> history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
 
             // Freshness Check: If DB has data but the latest candle is old, trigger sync
@@ -190,14 +199,6 @@ public class TradingController {
                 Candle latest = history.get(history.size() - 1);
                 LocalDateTime targetTime = com.algo.core.MarketUtils.getTargetSyncTime();
 
-                // If latest candle is significantly behind (e.g., 2 intervals), sync
-                // This handles the case where DB had "enough" candles (e.g., from yesterday)
-                // but today's data hasn't been synced yet.
-                // We use a small buffer (e.g., 2m) to avoid syncing during the very first
-                // minute of the interval.
-                // Increase sync sensitivity: If data is more than 1 minute old, sync it.
-                // This ensures charts feel 'instant' when switching between symbols.
-                // Calculate tolerance based on interval
                 int toleranceMins = 1;
                 if (interval.endsWith("min")) {
                     try {
@@ -211,20 +212,24 @@ public class TradingController {
                             latest.getTimestamp());
                     historicalDataService.syncData(symbol, token, interval);
 
-                    // Re-fetch after sync to get updated data
+                    // Re-fetch after sync
                     history = timescaleRepository.getLatestCandles(symbol, dbInterval, candleLimit);
+                }
+
+                // Sync the freshly loaded DB history back into the SymbolState RAM buffer
+                if (state != null && history != null && !history.isEmpty()) {
+                    state.seedHistory(interval, history);
                 }
 
                 // Append the current active/incomplete candle from memory
                 appendActiveCandle(symbol, dbInterval, history);
 
-                // Re-calculate indicators on the fly to ensure new logic (like Seller Fear)
-                // is applied to historical data served to the chart.
+                // Re-calculate indicators on the fly
                 historicalDataService.calculateAndPopulateIndicators(history, symbol, dbInterval);
 
                 logger.debug("Serving {} candles from TimescaleDB for {} ({})", history.size(), symbol, interval);
 
-                // Cache serialized result in Redis for 30s to speed up other monitors
+                // Cache in Redis
                 if (history != null && candleLimit <= 1000) {
                     try {
                         String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(history);

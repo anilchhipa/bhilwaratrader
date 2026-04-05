@@ -6,6 +6,7 @@ import IndicatorsWidget from './components/IndicatorsWidget';
 import ManageSymbolsWidget from './components/ManageSymbolsWidget';
 import { formatSymbol } from './helpers/formatSymbol';
 import { LiveFeedProvider } from './context/LiveFeedContext';
+import SymbolSearch from './components/SymbolSearch';
 
 import './App.css';
 
@@ -23,6 +24,7 @@ function App() {
 
   const [pageIndex, setPageIndex] = useState(0);
   const [maximizedChart, setMaximizedChart] = useState(null);
+  const [highlightedSymbol, setHighlightedSymbol] = useState(null);
 
   const [activeWidgets, setActiveWidgets] = useState({
     manage: false,
@@ -127,18 +129,19 @@ function App() {
 
 
   const scannerCategories = useMemo(() => {
-    const list = trackedSymbols.filter(s => s !== 'SENSEX');
-    const stocks = [], futures = [], calls = [], puts = [];
+    const list = trackedSymbols;
+    const stocks = [], futures = [], calls = [], puts = [], indices = [];
 
     list.forEach(s => {
-      if (s.endsWith('FUT')) futures.push(s);
+      if (s === 'SENSEX' || s === 'NIFTY 50' || s === 'BANKNIFTY' || s === 'FINNIFTY') indices.push(s);
+      else if (s.endsWith('FUT')) futures.push(s);
       else if (/\d+[CP]E$/.test(s)) {
         if (s.endsWith('CE')) calls.push(s);
         else puts.push(s);
       } else stocks.push(s);
     });
 
-    return { STOCKS: stocks, FUTURES: futures, CALLS: calls, PUTS: puts };
+    return { INDEX: indices, STOCKS: stocks, FUTURES: futures, CALLS: calls, PUTS: puts };
   }, [trackedSymbols]);
 
   const scannerSlots = useMemo(() => {
@@ -152,6 +155,38 @@ function App() {
   useEffect(() => {
     setPageIndex(0);
   }, [scannerCategory, scannerTf]);
+
+  const jumpToSymbol = useCallback((symbol) => {
+    // 0. If in maximized mode, we might want to just replace the maximized symbol or stay focused
+    if (maximizedChart) {
+      setMaximizedChart({ sym: symbol, tf: maximizedChart.tf });
+      return;
+    }
+
+    // 1. Identify which category this symbol belongs to
+    let foundCat = 'STOCKS';
+    for (const cat in scannerCategories) {
+      if (scannerCategories[cat].includes(symbol)) {
+        foundCat = cat;
+        break;
+      }
+    }
+
+    // 2. Switch category + ref
+    setScannerCategoryWithRef(foundCat);
+
+    // 3. Find index within that category to set correct page
+    const list = scannerCategories[foundCat];
+    const idx = list.indexOf(symbol);
+    if (idx >= 0) {
+      const page = Math.floor(idx / 8);
+      setPageIndex(page);
+    }
+
+    // 4. Flash/Highlight the chart for visual identification
+    setHighlightedSymbol(symbol);
+    setTimeout(() => setHighlightedSymbol(null), 5000);
+  }, [scannerCategories, maximizedChart]);
 
 
 
@@ -168,6 +203,12 @@ function App() {
                     <span style={{ fontFamily: '"Inter", sans-serif', fontSize: '18px', fontWeight: '900', color: '#f8fafc', letterSpacing: '0.5px' }}>Bhilwara</span>
                     <span style={{ fontFamily: '"Inter", sans-serif', fontSize: '18px', fontWeight: '300', color: '#fbbf24', letterSpacing: '1px' }}>Trader</span>
                   </div>
+                  <SymbolSearch
+                    symbols={trackedSymbols}
+                    onSymbolSelect={jumpToSymbol}
+                    symbolPrices={symbolPrices}
+                    onGlobalSearch={() => toggleWidget('manage')}
+                  />
                 </div>
 
                 {/* Header Center: Navigation & Categories */}
@@ -227,27 +268,89 @@ function App() {
                 </div>
               </div>
 
-              <div className="charts-grid matrix-2x4">
-                {currentScannerSlots.map((slot, idx) => (
-                  <div key={`${slot.sym}-${idx}`} className="grid-chart-item">
+              {maximizedChart ? (
+                <div className="maximized-active-layout-inline" style={{
+                  flex: 1,
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(280px, 0.8fr) 3.2fr',
+                  gridTemplateRows: '1fr 1fr',
+                  gap: '8px',
+                  padding: '4px',
+                  background: '#020617',
+                  height: 'calc(100vh - 120px)' // full height minus headers
+                }}>
+                  {/* Slot 1: NIFTY 50 Anchor */}
+                  <div className="anchor-slot" style={{ gridRow: '1 / 2', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
                     <CanvasTradingChart
-                      symbol={slot.sym}
-                      initialInterval={scannerTf}
+                      symbol="NIFTY 50"
+                      initialInterval={maximizedChart.tf}
                       isGrid={true}
                       externalVisibility={visibility}
                       onVisibilityUpdate={setVisibility}
-                      onMaximize={(tf) => setMaximizedChart({ sym: slot.sym, tf })}
+                      onMaximize={() => { }}
                       isMaximized={false}
+                      onPriceUpdate={handlePriceUpdate}
+                      themeColors={themeColors}
+                      symbolPrices={symbolPrices}
+                      hideMaximize={true}
+                    />
+                  </div>
+
+                  {/* Slot 5: SENSEX Anchor */}
+                  <div className="anchor-slot" style={{ gridRow: '2 / 3', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
+                    <CanvasTradingChart
+                      symbol="SENSEX"
+                      initialInterval={maximizedChart.tf}
+                      isGrid={true}
+                      externalVisibility={visibility}
+                      onVisibilityUpdate={setVisibility}
+                      onMaximize={() => { }}
+                      isMaximized={false}
+                      onPriceUpdate={handlePriceUpdate}
+                      themeColors={themeColors}
+                      symbolPrices={symbolPrices}
+                      hideMaximize={true}
+                    />
+                  </div>
+
+                  {/* Main Area: The Maximized Chart */}
+                  <div className="main-max-slot" style={{ gridRow: '1 / 3', gridColumn: '2 / 3', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 20px rgba(0,0,0,0.5)' }}>
+                    <CanvasTradingChart
+                      symbol={maximizedChart.sym}
+                      initialInterval={maximizedChart.tf}
+                      isGrid={false}
+                      externalVisibility={visibility}
+                      onVisibilityUpdate={setVisibility}
+                      onMaximize={() => setMaximizedChart(null)}
+                      onIntervalChange={(newTf) => setMaximizedChart(p => ({ ...p, tf: newTf }))}
+                      isMaximized={true}
                       onPriceUpdate={handlePriceUpdate}
                       themeColors={themeColors}
                       symbolPrices={symbolPrices}
                     />
                   </div>
-                ))}
-                {/* Empty Placeholders to keep structure */}
-                {Array.from({ length: Math.max(0, 8 - currentScannerSlots.length) }).map((_, i) => {
-                  const chartNumber = currentScannerSlots.length + i + 1;
-                  return (
+                </div>
+              ) : (
+                <div className="charts-grid matrix-2x4">
+                  {currentScannerSlots.map((slot, idx) => (
+                    <div key={`${slot.sym}-${idx}`} className="grid-chart-item">
+                      <CanvasTradingChart
+                        symbol={slot.sym}
+                        initialInterval={scannerTf}
+                        isGrid={true}
+                        externalVisibility={visibility}
+                        onVisibilityUpdate={setVisibility}
+                        onMaximize={(tf) => setMaximizedChart({ sym: slot.sym, tf })}
+                        isMaximized={false}
+                        onPriceUpdate={handlePriceUpdate}
+                        themeColors={themeColors}
+                        symbolPrices={symbolPrices}
+                        isHighlighted={highlightedSymbol === slot.sym}
+                      />
+                    </div>
+                  ))}
+                  {/* Empty Placeholders */}
+                  {Array.from({ length: Math.max(0, 8 - currentScannerSlots.length) }).map((_, i) => (
                     <div key={`placeholder-${i}`} className="grid-chart-item placeholder-slot" style={{
                       border: '1px solid rgba(255,255,255,0.03)',
                       background: 'linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px) 0 0 / 25px 25px, linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px) 0 0 / 25px 25px, #0a0f1d',
@@ -255,19 +358,16 @@ function App() {
                       justifyContent: 'center',
                       alignItems: 'center'
                     }}>
-                      <div className="placeholder-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', opacity: 0.15 }}>
-                        <span style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '2px', color: '#94a3b8' }}>CHART {chartNumber}</span>
-                        <div style={{ width: '40px', height: '1px', background: 'rgba(148, 163, 184, 0.3)' }}></div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', opacity: 0.15 }}>
+                        <span style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '2px', color: '#94a3b8' }}>CHART {currentScannerSlots.length + i + 1}</span>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </main>
         </div>
-
-        {/* The Action Hub was moved to the scanner header */}
 
         <IndicatorsWidget
           isOpen={activeWidgets.indicators}
@@ -294,59 +394,11 @@ function App() {
               <div className="toast-body" style={{ display: 'flex', flexDirection: 'column' }}>
                 <span className="toast-title">{formatSymbol(n.sym)} ({n.tf})</span>
                 <span className="toast-msg">SuperTrend flipped {n.type === 'up' ? 'Bullish' : 'Bearish'}</span>
-                <span style={{ fontSize: '9px', color: '#60a5fa', marginTop: '4px', fontWeight: 'bold' }}>CLICK TO MAXIMIZE</span>
+                <span style={{ fontSize: '9px', color: '#60a5fa', marginTop: '4px', fontWeight: 'bold' }}>CLICK TO VIEW</span>
               </div>
             </div>
           ))}
         </div>
-
-        {/* Maximized Chart Overlay */}
-        {maximizedChart && (
-          <div className="manage-symbols-modal full-overlay" style={{ zIndex: 9999 }}>
-            <div className="modal-content" style={{ width: '95%', height: '90vh', maxWidth: 'none', background: '#0a0f1d' }}>
-              <div className="modal-header" style={{ padding: '16px 24px', background: '#020617', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                <div className="title-area">
-                  <h2 style={{ fontSize: '18px', display: 'flex', alignItems: 'center' }}>{formatSymbol(maximizedChart.sym)} <span style={{ color: '#3b82f6', fontSize: '12px', marginLeft: '12px', background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: '4px' }}>{maximizedChart.tf.toUpperCase()}</span></h2>
-                </div>
-                <button
-                  onClick={() => setMaximizedChart(null)}
-                  style={{
-                    border: 'none',
-                    background: '#ef4444',
-                    color: '#fff',
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 10px rgba(239, 68, 68, 0.3)',
-                    transition: 'transform 0.2s'
-                  }}
-                  onMouseEnter={(e) => e.target.style.transform = 'scale(1.1)'}
-                  onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
-                >✕</button>
-              </div>
-              <div className="maximized-chart-wrapper" style={{ flex: 1, position: 'relative' }}>
-                <CanvasTradingChart
-                  symbol={maximizedChart.sym}
-                  initialInterval={maximizedChart.tf}
-                  isGrid={false}
-                  externalVisibility={visibility}
-                  onVisibilityUpdate={setVisibility}
-                  onMaximize={() => setMaximizedChart(null)}
-                  onIntervalChange={(newTf) => setMaximizedChart(p => ({ ...p, tf: newTf }))}
-                  isMaximized={true}
-                  onPriceUpdate={handlePriceUpdate}
-                  themeColors={themeColors}
-                  symbolPrices={symbolPrices}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
       </div>
     </LiveFeedProvider>
   );

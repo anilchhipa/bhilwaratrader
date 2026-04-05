@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package com.algo.proto;
+
+option java_package = "com.algo.proto";
+option java_outer_classname = "ChartProtos";
+
+message CandleUpdate {
+    string symbol = 1;
+    string timeframe = 2;
+    CandleData candle = 3;
+}
+
+message CandleData {
+    int64 t = 1;      // timestamp
+    double o = 2;     // open
+    double h = 3;     // high
+    double l = 4;     // low
+    double c = 5;     // close
+    double v = 6;     // volume
+    double d = 7;     // delta
+    
+    // Indicators
+    double ema15 = 8;
+    double ema15Plus5 = 9;
+    double ema15Plus15 = 10;
+    double ema15Plus15Plus15 = 11;
+    double ema15Plus15Plus15Plus15 = 12;
+    double ema15Plus15Plus15Plus15Plus30 = 13;
+    
+    // SuperTrend 1
+    double stMa = 14;
+    double stUp = 15;
+    double stDn = 16;
+    int32 stTrend = 17;
+    
+    // SuperTrend 2
+    double stMa2 = 18;
+    double stUp2 = 19;
+    double stDn2 = 20;
+    int32 stTrend2 = 21;
+}
+
+message BatchCandleUpdate {
+    repeated CandleUpdate updates = 1;
+}
