@@ -122,9 +122,6 @@ public class Strategy {
         if (stma2 != null)
             stma2.updateLive(candle);
 
-        // Phase 2: Direct Tick Whale Detection
-        detectWhaleSignal(candle);
-
         populateCandleIndicators(candle);
     }
 
@@ -211,33 +208,6 @@ public class Strategy {
             addToHistory(ema15_15_15History, ema15_15_15);
             addToHistory(ema15_15_15_15History, ema15_15_15_15);
             addToHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
-        }
-    }
-
-    private void detectWhaleSignal(Candle candle) {
-        if (volumeHistory.size() < 10)
-            return;
-
-        double sum = 0;
-        for (double v : volumeHistory)
-            sum += v;
-        double avgVol = sum / volumeHistory.size();
-
-        double candleVol = candle.getVolume();
-        double body = Math.abs(candle.getClose() - candle.getOpen());
-        double range = Math.max(0.0001, candle.getHigh() - candle.getLow());
-        double deltaVal = candle.getDelta();
-        boolean isUp = candle.getClose() >= candle.getOpen();
-
-        // High Volume + Strong Body = Whale
-        if (candleVol > (avgVol * 3) && (body > range * 0.8)) {
-            if (deltaVal > 0 || (deltaVal == 0 && isUp)) {
-                candle.setWhaleSignal(1); // Whale Buy
-            } else if (deltaVal < 0 || (deltaVal == 0 && !isUp)) {
-                candle.setWhaleSignal(-1); // Seller Fear / Whale Sell
-            }
-        } else {
-            candle.setWhaleSignal(0);
         }
     }
 

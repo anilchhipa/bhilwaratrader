@@ -12,7 +12,7 @@ public class LiveUpdateBroadcaster {
 
     private final ConcurrentHashMap<String, Long> lastBroadcastTime = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> lastBroadcastCandleTime = new ConcurrentHashMap<>();
-    private static final long THROTTLE_MS = 250; // max 4 updates per second per symbol/interval
+    private static final long THROTTLE_MS = 50; // max 20 updates per second per symbol/interval
 
     public void broadcastUpdate(String symbol, String interval, JSONObject ohlc, JSONObject indicators) {
         String key = symbol + "_" + interval;

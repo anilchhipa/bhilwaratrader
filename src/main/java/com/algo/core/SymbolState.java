@@ -2,6 +2,7 @@ package com.algo.core;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,10 @@ public class SymbolState {
     // Timeframe -> List of historical Candles (The "Hot Buffer")
     private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
     private static final int MAX_HOT_CANDLES = 1000;
+
+    // Per-timeframe locks for fine-grained concurrency (avoids one global
+    // synchronized)
+    private final Map<String, ReentrantLock> tfLocks = new ConcurrentHashMap<>();
 
     // Timeframe -> Candle
     private final Map<String, Candle> currentCandles = new ConcurrentHashMap<>();
@@ -61,13 +66,30 @@ public class SymbolState {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
             strategies.put(tf, new Strategy(indicatorConfig));
             historyBuffers.put(tf, java.util.Collections.synchronizedList(new java.util.ArrayList<>()));
+            tfLocks.put(tf, new ReentrantLock());
         }
     }
 
-    public synchronized void update(double price, double delta, java.time.LocalDateTime time) {
+    /**
+     * Process a live tick. Uses per-timeframe locking instead of a single
+     * class-level synchronized block, allowing parallel processing across symbols.
+     * Returns the set of timeframes that were actually modified (for selective
+     * broadcast).
+     */
+    public java.util.Set<String> update(double price, double delta, java.time.LocalDateTime time) {
+        java.util.Set<String> dirty = new java.util.HashSet<>(4);
         for (String tf : timeframes) {
-            updateTimeframe(tf, price, delta, time);
+            ReentrantLock lock = tfLocks.get(tf);
+            lock.lock();
+            try {
+                if (updateTimeframe(tf, price, delta, time)) {
+                    dirty.add(tf);
+                }
+            } finally {
+                lock.unlock();
+            }
         }
+        return dirty;
     }
 
     /**
@@ -148,7 +170,8 @@ public class SymbolState {
         }
     }
 
-    private void updateTimeframe(String tf, double price, double delta, java.time.LocalDateTime time) {
+    /** Returns true if any state changed (price/indicator updated). */
+    private boolean updateTimeframe(String tf, double price, double delta, java.time.LocalDateTime time) {
         java.time.LocalDateTime start = getIntervalStartTime(time, tf);
         Candle current = currentCandles.get(tf);
 
@@ -157,13 +180,21 @@ public class SymbolState {
             if (current != null) {
                 lastStablePrices.put(tf, current.getClose());
 
-                // ADD COMPLETED CANDLE TO RAM BUFFER
+                // ADD COMPLETED CANDLE TO RAM BUFFER (Prevent duplicates during live/history
+                // transition)
                 java.util.List<Candle> buffer = historyBuffers.get(tf);
                 if (buffer != null) {
                     synchronized (buffer) {
-                        buffer.add(current);
+                        if (buffer.isEmpty()
+                                || current.getTimestamp().isAfter(buffer.get(buffer.size() - 1).getTimestamp())) {
+                            buffer.add(current);
+                        } else if (current.getTimestamp().equals(buffer.get(buffer.size() - 1).getTimestamp())) {
+                            // Update the existing partial candle with the final completed state
+                            buffer.set(buffer.size() - 1, current);
+                        }
+
                         if (buffer.size() > MAX_HOT_CANDLES) {
-                            buffer.remove(0);
+                            buffer.subList(0, buffer.size() - MAX_HOT_CANDLES).clear();
                         }
                     }
                 }
@@ -204,9 +235,14 @@ public class SymbolState {
                 if (deviation > 0.5) {
                     logger.error("SymbolState [{} {}]: Ignored outlier tick {} (deviation: {}% from stable {})", symbol,
                             tf, price, (deviation * 100), stablePrice);
-                    return;
+                    return false;
                 }
             }
+
+            // Only update if price actually changed (skip identical tick noise)
+            boolean priceChanged = (price != current.getClose());
+            if (!priceChanged && delta == 0)
+                return false;
 
             current.setHigh(Math.max(current.getHigh(), price));
             current.setLow(Math.min(current.getLow(), price));
@@ -221,6 +257,7 @@ public class SymbolState {
         }
 
         updateIndicatorMap(tf, current);
+        return true;
     }
 
     /**

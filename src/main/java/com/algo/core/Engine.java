@@ -136,27 +136,38 @@ public class Engine {
 
         SymbolState state = symbolStates.get(symbol);
         if (state != null) {
-            state.update(price, delta, LocalDateTime.now());
+            // update() returns only the timeframes that actually changed
+            java.util.Set<String> dirtyIntervals = state.update(price, delta, LocalDateTime.now());
+            if (dirtyIntervals.isEmpty())
+                return; // price was identical — skip
 
             long now = System.currentTimeMillis();
             long lastQueue = lastTickQueueTime.getOrDefault(symbol, 0L);
 
-            // Throttle async dispatch to max 4 times per second (250ms) per symbol
-            // This provides a much more responsive "live" feel while still protecting
-            // downstream Redis and WebSocket buffers from excessive tick flooding.
-            if (now - lastQueue >= 250) {
+            // Throttle async broadcast to max 20/sec per symbol
+            if (now - lastQueue >= 50) {
                 lastTickQueueTime.put(symbol, now);
-                CompletableFuture.runAsync(() -> syncToRedis(state), asyncPool);
+                // Capture dirty set so lambda closure is safe
+                final java.util.Set<String> toSync = dirtyIntervals;
+                CompletableFuture.runAsync(() -> syncToRedis(state, toSync), asyncPool);
             }
         }
     }
 
-    private void syncToRedis(SymbolState state) {
+    /**
+     * Only syncs the timeframes that were marked dirty by the tick processing.
+     * This avoids redundant Redis writes and WebSocket broadcasts for unchanged
+     * intervals.
+     */
+    private void syncToRedis(SymbolState state, java.util.Set<String> dirtyIntervals) {
         if (redisClient == null)
             return;
 
-        for (String interval : state.getCurrentCandles().keySet()) {
+        for (String interval : dirtyIntervals) {
             Candle candle = state.getCurrentCandles().get(interval);
+            if (candle == null)
+                continue;
+
             JSONObject ohlc = new JSONObject()
                     .put("o", candle.getOpen())
                     .put("h", candle.getHigh())
@@ -164,9 +175,12 @@ public class Engine {
                     .put("c", candle.getClose())
                     .put("d", candle.getDelta())
                     .put("v", candle.getVolume())
-                    .put("t", candle.getTimestamp().format(ISO_FORMATTER));
+                    .put("t",
+                            candle.getTimestamp().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
 
             Map<String, Double> indicators = state.getIndicatorValues().get(interval);
+            if (indicators == null)
+                continue;
             JSONObject indJson = new JSONObject(indicators);
 
             redisClient.pushState(state.getSymbol(), interval, ohlc, indJson);

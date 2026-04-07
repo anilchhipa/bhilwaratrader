@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
-import SockJS from 'sockjs-client';
-import Stomp from 'stompjs';
-import { WS_BASE } from '../config';
+import { Client } from '@stomp/stompjs';
 import protobuf from 'protobufjs';
 
 const LiveFeedContext = createContext(null);
@@ -28,8 +26,8 @@ export const LiveFeedProvider = ({ children }) => {
     }, []);
 
     const decodeMessage = useCallback((msg) => {
-        // If message body is binary (Uint8Array), decode via Proto
-        if (msg.binaryBody && protoType) {
+        // If message body is binary, decode via Proto
+        if (msg.binaryBody && msg.binaryBody.length > 0 && protoType) {
             try {
                 const decoded = protoType.decode(msg.binaryBody);
                 const c = decoded.candle;
@@ -55,7 +53,7 @@ export const LiveFeedProvider = ({ children }) => {
                 console.warn("LiveFeed: Proto decode failed", e);
             }
         }
-        // Fallback to JSON
+        // Fallback to JSON if it's sent as a string payload
         try {
             return JSON.parse(msg.body);
         } catch (e) {
@@ -64,18 +62,29 @@ export const LiveFeedProvider = ({ children }) => {
     }, [protoType]);
 
     const connect = useCallback(() => {
-        console.log("LiveFeed: Attempting WebSocket connection...");
-        const socket = new SockJS(WS_BASE);
-        const stomp = Stomp.over(socket);
-        stomp.debug = null; // Disable noisy logs
+        console.log("LiveFeed: Attempting pure WebSocket connection...");
+        // Construct native WS URL directly (bypassing SockJS fallback)
+        // If hosted on https, use wss. Otherwise ws.
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // In dev, assuming API_BASE is on 8085
+        const currentHost = window.location.hostname;
+        const brokerUrl = `${wsProtocol}//${currentHost}:8085/ws-trading`;
 
-        stomp.connect({}, () => {
-            console.log("LiveFeed: WebSocket Connected!");
-            stompClientRef.current = stomp;
+        const stompClient = new Client({
+            brokerURL: brokerUrl,
+            reconnectDelay: 1000,
+            heartbeatIncoming: 4000,
+            heartbeatOutgoing: 4000,
+            splitLargeFrames: true
+        });
+
+        stompClient.onConnect = (frame) => {
+            console.log("LiveFeed: Binary WebSocket STOMP Connected!");
+            stompClientRef.current = stompClient;
             setStatus('connected');
 
             // Subscribe to the personal snapshot queue
-            stomp.subscribe('/user/queue/snapshot', (msg) => {
+            stompClient.subscribe('/user/queue/snapshot', (msg) => {
                 const data = decodeMessage(msg);
                 if (data && data.type === 'SNAPSHOT' && data.symbol && data.interval) {
                     const key = `${data.symbol}/${data.interval}`;
@@ -87,24 +96,31 @@ export const LiveFeedProvider = ({ children }) => {
             // Re-subscribe to all existing live-tick topics
             Object.keys(subscriptionsRef.current).forEach(topic => {
                 const subEntry = subscriptionsRef.current[topic];
-                subEntry.subObject = stomp.subscribe(topic, (msg) => {
+                subEntry.subObject = stompClient.subscribe(topic, (msg) => {
                     const data = decodeMessage(msg);
                     if (data) subEntry.listeners.forEach(cb => cb(data));
                 });
             });
-        }, (err) => {
-            console.warn("LiveFeed: Connection lost, retrying in 3s...", err);
+        };
+
+        stompClient.onStompError = (frame) => {
+            console.error('Broker reported error: ' + frame.headers['message']);
+        };
+
+        stompClient.onWebSocketError = (event) => {
+            console.error('WebSocket Error', event);
             setStatus('error');
-            setTimeout(() => setReconnectCount(c => c + 1), 3000);
-        });
+        }
+
+        stompClient.activate();
     }, [decodeMessage]);
 
     useEffect(() => {
         connect();
         return () => {
-            if (stompClientRef.current) stompClientRef.current.disconnect();
+            if (stompClientRef.current) stompClientRef.current.deactivate();
         };
-    }, [reconnectCount, connect]);
+    }, [connect]);
 
     const registerSnapshotListener = useCallback((symbol, interval, callback) => {
         const key = `${symbol}/${interval}`;

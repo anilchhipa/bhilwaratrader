@@ -211,7 +211,7 @@ public class LiveFeed {
                 if (!tokenIds.isEmpty()) {
                     try {
                         tickers[i].subscribe(tokenIds);
-                        tickers[i].setMode(tokenIds, KiteTicker.modeLTP);
+                        tickers[i].setMode(tokenIds, KiteTicker.modeFull);
                         logger.info("LiveFeed: Ticker {} sent subscription request for {} tokens.", i, tokenIds.size());
                     } catch (Exception e) {
                         logger.error("LiveFeed: Error subscribing on Ticker {}: {}", i, e.getMessage());

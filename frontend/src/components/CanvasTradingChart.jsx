@@ -14,6 +14,10 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
     const [loading, setLoading] = useState(true);
+    // Canonical live data lives in a ref — avoids React re-renders on every tick
+    const liveDataRef = useRef([]);
+    // Pending RAF handle for live-tick renders
+    const pendingRafRef = useRef(null);
 
     useEffect(() => {
         setTimeframe(initialInterval);
@@ -90,7 +94,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const overlayCanvasRef = useRef(null);
     const replayDataRef = useRef([]);
 
-    const dData = useMemo(() => isReplayMode && replayIndex >= 0 ? replayDataRef.current.slice(0, replayIndex + 1) : data, [data, isReplayMode, replayIndex]);
+    const dData = useMemo(() => isReplayMode && replayIndex >= 0 ? replayDataRef.current.slice(0, replayIndex + 1) : liveDataRef.current, [data, isReplayMode, replayIndex]);
 
     const getMath = useCallback((w, h, d) => {
         const pt = 26, pr = 38, pb = 20, cw = w - pr, ch = h - pb - pt, bs = cw / visibleBars;
@@ -201,35 +205,13 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             if (deltaVal > 5000 && isUp) col = '#34d399';
             else if (deltaVal < -5000 && !isUp) col = '#f87171';
 
-            // 1. WHALE DETECTION (Backend-driven Phase 2 Signaling)
-            const whaleSig = c.whaleSignal || 0;
-            let isWhaleBuy = whaleSig === 1;
-            let isWhaleSell = whaleSig === -1;
-
-            if (whaleSig === 0) {
-                // Fallback: Legacy client-side detection (used if backend signal is missing)
-                const globalIdx = math.start + i;
-                let totalVol = 0, count = 0;
-                for (let j = Math.max(0, globalIdx - 20); j < globalIdx; j++) {
-                    totalVol += (dData[j].volume || dData[j].v || 0); count++;
-                }
-                const avgVol = count > 0 ? totalVol / count : Infinity;
-                const candleVol = (c.volume || c.v || 0);
-                const range = Math.max(0.0001, Math.abs(c.high - c.low));
-                const body = Math.abs(c.close - c.open);
-                if (candleVol > (avgVol * 3) && (body > range * 0.8)) {
-                    if (deltaVal > 0 || (deltaVal === 0 && isUp)) isWhaleBuy = true;
-                    else if (deltaVal < -0 || (deltaVal === 0 && !isUp)) isWhaleSell = true;
-                }
-            }
-
             // Draw wick
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, math.p2y(c.high)); ctx.lineTo(x, math.p2y(c.low)); ctx.stroke();
 
             // Draw body with potential Glow Effect for High Delta
             ctx.fillStyle = col;
-            if (Math.abs(deltaVal) > 10000 || isWhaleBuy || isWhaleSell) {
-                ctx.shadowBlur = isWhaleBuy || isWhaleSell ? 15 : 8; ctx.shadowColor = col;
+            if (Math.abs(deltaVal) > 10000) {
+                ctx.shadowBlur = 8; ctx.shadowColor = col;
             } else {
                 ctx.shadowBlur = 0;
             }
@@ -237,19 +219,6 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             const bw = Math.max(2, math.bs * 0.8);
             ctx.fillRect(x - bw / 2, Math.min(math.p2y(c.open), math.p2y(c.close)), bw, Math.max(1, Math.abs(math.p2y(c.open) - math.p2y(c.close))));
             ctx.shadowBlur = 0;
-
-            // DRAW B/S MARKERS
-            if (isWhaleBuy || isWhaleSell) {
-                ctx.fillStyle = isWhaleBuy ? '#34d399' : '#f87171';
-                ctx.font = 'bold 12px Inter'; ctx.textAlign = 'center';
-                const label = isWhaleBuy ? 'B' : 'S';
-                const yPos = isWhaleBuy ? math.p2y(c.low) + 15 : math.p2y(c.high) - 10;
-                ctx.fillText(label, x, yPos);
-
-                // Extra Pulse Circle
-                ctx.strokeStyle = ctx.fillStyle; ctx.beginPath();
-                ctx.arc(x, yPos - 3, 8, 0, Math.PI * 2); ctx.stroke();
-            }
         });
 
         // Y-AXIS (Compact Sidebar)
@@ -377,13 +346,16 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     // Seed chart from WebSocket snapshot delivery (zero REST calls in scanner mode)
     const snapshotCallback = useCallback((candles) => {
         if (!candles || candles.length === 0) {
-            setData([]);
+            liveDataRef.current = [];
             replayDataRef.current = [];
+            setData([]);
             setLoading(false);
             return;
         }
-        setData(candles);
-        replayDataRef.current = candles;
+        const normalized = candles.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+        liveDataRef.current = normalized;
+        replayDataRef.current = normalized;
+        setData(normalized); // trigger one re-render to update dData memo
         setLoading(false);
     }, []);
 
@@ -391,8 +363,10 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     // Fall back to individual REST fetch only for maximized (full history) view
     useEffect(() => {
         if (preloadedData && preloadedData.length > 0) {
-            setData(preloadedData);
-            replayDataRef.current = preloadedData;
+            const normalized = preloadedData.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+            liveDataRef.current = normalized;
+            replayDataRef.current = normalized;
+            setData(normalized);
             setLoading(false);
             return;
         }
@@ -403,7 +377,13 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             const controller = new AbortController();
             setLoading(true);
             axios.get(`${API_BASE}/api/history/${symbol}/${interval}?limit=4000&_t=${Date.now()}`, { signal: controller.signal })
-                .then(res => { setData(res.data); replayDataRef.current = res.data; setLoading(false); })
+                .then(res => {
+                    const normalized = res.data.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+                    liveDataRef.current = normalized;
+                    replayDataRef.current = normalized;
+                    setData(normalized);
+                    setLoading(false);
+                })
                 .catch(err => { if (!axios.isCancel(err)) { console.error(err); setLoading(false); } });
             return () => controller.abort();
         }
@@ -413,22 +393,27 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     }, [symbol, interval, preloadedData, isMaximized]);
     useLiveFeed(symbol, interval, useCallback(u => {
         if (isReplayMode) return;
-        setData(p => {
-            const f = {
-                ...u.ohlc, ...u.indicators,
-                timestamp: u.ohlc.t,
-                open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c,
-                delta: u.ohlc.d
-            };
-            const nx = [...p];
-            if (nx.length && nx[nx.length - 1].timestamp === f.timestamp) {
-                nx[nx.length - 1] = f;
-            } else {
-                nx.push(f);
-            }
-            return nx;
-        });
-    }, [isReplayMode]), snapshotCallback);
+        // Mutate the ref directly — NO setState, NO array copy, NO React re-render
+        const arr = liveDataRef.current;
+        const f = {
+            ...u.ohlc, ...u.indicators,
+            timestamp: u.ohlc.t,
+            open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c,
+            delta: u.ohlc.d
+        };
+        if (arr.length && arr[arr.length - 1].timestamp === f.timestamp) {
+            arr[arr.length - 1] = f;
+        } else {
+            arr.push(f);
+        }
+        // Schedule a canvas repaint if one isn't already pending — 60fps max
+        if (!pendingRafRef.current) {
+            pendingRafRef.current = requestAnimationFrame(() => {
+                pendingRafRef.current = null;
+                render();
+            });
+        }
+    }, [isReplayMode, render]), snapshotCallback);
     useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 250); return () => clearInterval(t); }, [isReplaying]);
     useEffect(() => {
         render();
