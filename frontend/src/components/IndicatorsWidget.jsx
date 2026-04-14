@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeColors, setThemeColors }) => {
+const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeColors, setThemeColors, gridLayout, setGridLayout, setPageIndex }) => {
     const [position, setPosition] = useState(() => {
         const saved = localStorage.getItem('indicators_pos');
         return saved ? JSON.parse(saved) : { x: 80, y: 150 };
@@ -46,7 +46,7 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
     };
 
     const startDrag = (e) => {
-        if (e.target.closest('.indicators-header')) {
+        if (e.target.closest('.premium-widget-header')) {
             setIsDragging(true);
             offsetRef.current = {
                 x: e.clientX - position.x,
@@ -78,7 +78,7 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
 
     return (
         <div
-            className="indicators-floating-panel"
+            className="premium-widget-panel"
             style={{
                 left: `${Math.min(window.innerWidth - 340, Math.max(20, position.x))}px`,
                 top: `${Math.min(window.innerHeight - 340, Math.max(20, position.y))}px`,
@@ -86,94 +86,96 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
                 zIndex: 1100
             }}
         >
-            <div className="indicators-header" onMouseDown={startDrag} style={{ cursor: 'move' }}>
-                <div className="indicators-title">
-                    <span className="indicators-icon">📊</span>
-                    <span>Indicators</span>
+            <div className="premium-widget-header" onMouseDown={startDrag} style={{ cursor: 'move' }}>
+                <div className="premium-widget-title">
+                    <span className="premium-widget-icon">📊</span>
+                    <span>Configuration</span>
                 </div>
-                <button className="indicators-close-btn" onClick={onClose}>✕</button>
+                <button className="premium-widget-close-btn" onClick={onClose}>✕</button>
             </div>
 
-            <div className="indicators-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                <div className="categories-container" style={{ gap: '12px' }}>
+            <div className="premium-widget-body">
+                <div className="categories-container" style={{ gap: '16px' }}>
                     {/* Global Viewport Controls */}
-                    <div className="category-group" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
-                        <label style={{ fontSize: '10px', color: '#fbbf24' }}>Global Viewport Controls</label>
-                        <div style={{ display: 'flex', gap: '8px', padding: '8px 4px' }}>
+                    <div className="category-group" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
+                        <label className="group-label">Global Viewport Controls</label>
+                        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                             {/* Bar Zoom Dropdown */}
-                            <div style={{
-                                flex: 1,
-                                display: 'flex',
-                                alignItems: 'center',
-                                background: 'rgba(0,0,0,0.2)',
-                                padding: '0 8px',
-                                borderRadius: '4px',
-                                border: '1px solid rgba(255,255,255,0.05)',
-                                height: '28px'
-                            }}>
-                                <span style={{ fontSize: '9px', color: '#94a3b8', marginRight: '8px', fontWeight: '800' }}>ZOOM</span>
+                            <div className="control-item-wrapper" style={{ flex: 1 }}>
+                                <span className="control-label">ZOOM</span>
                                 <select
                                     value={zoomVal}
                                     onChange={(e) => {
                                         const count = parseInt(e.target.value);
                                         setZoomVal(count);
                                         localStorage.setItem('chart_zoom_global', count);
-                                        // Save to all intervals as a shortcut
                                         ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, count));
-
                                         const bc = new BroadcastChannel('grid_chart_sync');
                                         bc.postMessage({ type: 'SYNC_ZOOM', count });
                                         bc.close();
                                     }}
-                                    style={{ background: 'transparent', border: 'none', color: '#d1d4dc', fontSize: '11px', fontWeight: '900', cursor: 'pointer', outline: 'none', width: '100%' }}
+                                    className="premium-select"
                                 >
                                     {[50, 80, 120, 160, 240, 320, 500, 800].map(cnt => (
-                                        <option key={cnt} value={cnt} style={{ background: '#1e222d' }}>{cnt} Bars</option>
+                                        <option key={cnt} value={cnt}>{cnt} Bars</option>
                                     ))}
                                 </select>
                             </div>
 
                             {/* Log Toggle */}
-                            <div style={{
-                                width: '60px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                height: '28px',
-                                background: logEnabled ? 'rgba(52, 211, 153, 0.2)' : 'rgba(0,0,0,0.2)',
-                                borderRadius: '4px',
-                                border: `1px solid ${logEnabled ? '#059669' : 'rgba(255,255,255,0.05)'}`,
-                                cursor: 'pointer'
-                            }}
+                            <div
+                                className={`log-toggle-btn ${logEnabled ? 'active' : ''}`}
                                 onClick={() => {
                                     const next = !logEnabled;
                                     setLogEnabled(next);
                                     localStorage.setItem('chart_log_scale', next);
-
                                     const bc = new BroadcastChannel('grid_chart_sync');
                                     bc.postMessage({ type: 'SYNC_LOG_SCALE', enabled: next });
                                     bc.close();
                                 }}
                                 title="Toggle Logarithmic Scale Globally"
                             >
-                                <span style={{ fontSize: '10px', color: logEnabled ? '#34d399' : '#94a3b8', fontWeight: '800' }}>LOG</span>
+                                <span>LOG</span>
                             </div>
                         </div>
+
+                        {/* Scanner Grid Layout */}
+                        {gridLayout && (
+                            <div style={{ marginTop: '16px' }}>
+                                <label className="control-label" style={{ marginBottom: '8px', display: 'block', fontSize: '11px', color: '#94a3b8', letterSpacing: '1px' }}>GRID LAYOUT</label>
+                                <div className="scanner-tf-selector" style={{ margin: 0, justifyContent: 'flex-start', background: 'rgba(0, 0, 0, 0.2)', padding: '4px', borderRadius: '6px' }}>
+                                    {['2x2', '2x3', '2x4'].map(layout => (
+                                        <button
+                                            key={layout}
+                                            className={`tf-tab ${gridLayout === layout ? 'active' : ''}`}
+                                            style={{ flex: 1, textAlign: 'center', padding: '6px' }}
+                                            onClick={() => {
+                                                if (setGridLayout) setGridLayout(layout);
+                                                localStorage.setItem('scanner_grid_layout', layout);
+                                                if (setPageIndex) setPageIndex(0);
+                                            }}
+                                        >
+                                            {layout}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {sections.map(section => (
                         <div key={section.title} className="category-group">
-                            <label style={{ fontSize: '10px' }}>{section.title}</label>
-                            <div className="checkbox-list" style={{ gridTemplateColumns: '1fr' }}>
+                            <label className="group-label">{section.title}</label>
+                            <div className="checkbox-list" style={{ gridTemplateColumns: '1fr', marginTop: '10px' }}>
                                 {section.items.map(item => (
-                                    <div key={item.key} className="checkbox-item" style={{ height: '32px' }}>
-                                        <label style={{ padding: '0 8px' }}>
+                                    <div key={item.key} className="checkbox-item premium-checkbox" style={{ height: '36px' }}>
+                                        <label>
                                             <input
                                                 type="checkbox"
                                                 checked={!!visibility[item.key]}
                                                 onChange={() => handleToggle(item.key)}
                                             />
-                                            <span className="inst-name" style={{ fontSize: '11px' }}>{item.label}</span>
+                                            <span className="inst-name">{item.label}</span>
                                         </label>
                                     </div>
                                 ))}

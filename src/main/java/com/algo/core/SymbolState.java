@@ -41,7 +41,8 @@ public class SymbolState {
     private final Map<String, java.time.LocalDateTime> lastFlipTimes = new ConcurrentHashMap<>();
 
     // Timeframe -> Last Trend confirmed at candle close
-    private final Map<String, Integer> confirmedTrendMap = new ConcurrentHashMap<>();
+    private final Map<String, Integer> confirmedTrendMap1 = new ConcurrentHashMap<>();
+    private final Map<String, Integer> confirmedTrendMap2 = new ConcurrentHashMap<>();
 
     @FunctionalInterface
     public interface CandleCompleteListener {
@@ -50,7 +51,7 @@ public class SymbolState {
 
     @FunctionalInterface
     public interface TrendFlipListener {
-        void onFlip(String symbol, String timeframe, int trend);
+        void onFlip(String symbol, String timeframe, int trend, boolean isSecondary);
     }
 
     // Callback when a candle is completed
@@ -144,12 +145,20 @@ public class SymbolState {
         updateIndicatorMap(tf, last);
 
         // Find when the trend last flipped for this timeframe
-        Integer currentTrend = last.getStTrend();
-        if (currentTrend != null) {
-            confirmedTrendMap.put(tf, currentTrend);
+        Integer currentTrend1 = last.getStTrend();
+        Integer currentTrend2 = last.getStTrend2();
+        if (currentTrend1 != null) {
+            confirmedTrendMap1.put(tf, currentTrend1);
+        }
+        if (currentTrend2 != null) {
+            confirmedTrendMap2.put(tf, currentTrend2);
+        }
+
+        // We use confirmedTrendMap1 for the primary timestamp tracking in the UI
+        if (currentTrend1 != null) {
             for (int i = historicalCandles.size() - 2; i >= 0; i--) {
                 Candle prev = historicalCandles.get(i);
-                if (prev.getStTrend() != null && !prev.getStTrend().equals(currentTrend)) {
+                if (prev.getStTrend() != null && !prev.getStTrend().equals(currentTrend1)) {
                     // Trend changed at historicalCandles.get(i + 1)
                     lastFlipTimes.put(tf, historicalCandles.get(i + 1).getTimestamp());
                     break;
@@ -213,17 +222,30 @@ public class SymbolState {
             strategies.get(tf).onNewCandle(current, newCandle, macroBias);
 
             // Confirmed Trend Flip Detection (only on candle close)
-            Integer trendAtClose = current.getStTrend();
-            Integer lastConfirmed = confirmedTrendMap.get(tf);
-            if (trendAtClose != null && lastConfirmed != null && !trendAtClose.equals(lastConfirmed)) {
+            // USER REQUEST: Only notify for 3min and 5min timeframes.
+            boolean shouldNotify = tf.equals("3min") || tf.equals("5min");
+
+            Integer trendAtClose1 = current.getStTrend();
+            Integer lastConfirmed1 = confirmedTrendMap1.get(tf);
+            if (trendAtClose1 != null && lastConfirmed1 != null && !trendAtClose1.equals(lastConfirmed1)) {
                 lastFlipTimes.put(tf, current.getTimestamp());
-                // Alert for mobile notification
-                if (onTrendFlip != null) {
-                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose);
+                if (onTrendFlip != null && shouldNotify) {
+                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
                 }
             }
-            if (trendAtClose != null) {
-                confirmedTrendMap.put(tf, trendAtClose);
+            if (trendAtClose1 != null) {
+                confirmedTrendMap1.put(tf, trendAtClose1);
+            }
+
+            Integer trendAtClose2 = current.getStTrend2();
+            Integer lastConfirmed2 = confirmedTrendMap2.get(tf);
+            if (trendAtClose2 != null && lastConfirmed2 != null && !trendAtClose2.equals(lastConfirmed2)) {
+                if (onTrendFlip != null && shouldNotify) {
+                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose2, true);
+                }
+            }
+            if (trendAtClose2 != null) {
+                confirmedTrendMap2.put(tf, trendAtClose2);
             }
 
             current = newCandle;

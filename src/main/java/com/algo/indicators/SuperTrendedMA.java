@@ -103,9 +103,9 @@ public class SuperTrendedMA {
             tr = high - low;
         }
 
-        // Calculate EMA
+        // Calculate EMA - snap to price if lastEma is zero or negative
         double k = 2.0 / (maLength + 1);
-        double currentEma = (lastEma == 0) ? close : close * k + lastEma * (1 - k);
+        double currentEma = (lastEma <= 0 || Double.isNaN(lastEma)) ? close : close * k + lastEma * (1 - k);
 
         // Calculate ATR
         double currentAtr = 0;

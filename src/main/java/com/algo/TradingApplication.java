@@ -118,7 +118,7 @@ public class TradingApplication {
 
                 // 0b. Telegram Startup Probe (Verify ID and Action)
                 engine.sendStartupMessage();
-                // 0. Load symbols from DB
+                // 0. Load tracked symbols from DB at startup
                 java.util.List<String[]> tracked = timescaleRepository.getTrackedSymbols();
                 System.out.println("Loading " + tracked.size() + " symbols from database...");
                 for (String[] row : tracked) {

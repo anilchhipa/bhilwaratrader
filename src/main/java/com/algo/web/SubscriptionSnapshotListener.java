@@ -35,12 +35,18 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
     // Use virtual threads for non-blocking DB lookups per subscription
     private final Executor snapshotExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
-    @Autowired private ObjectMapper mapper;
-    @Autowired private SimpMessagingTemplate messagingTemplate;
-    @Autowired private TimescaleRepository timescaleRepository;
-    @Autowired private HistoricalDataService historicalDataService;
-    @Autowired private TokenManager tokenManager;
-    @Autowired private Engine engine;
+    @Autowired
+    private ObjectMapper mapper;
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+    @Autowired
+    private TimescaleRepository timescaleRepository;
+    @Autowired
+    private HistoricalDataService historicalDataService;
+    @Autowired
+    private TokenManager tokenManager;
+    @Autowired
+    private Engine engine;
 
     @Override
     public void onApplicationEvent(SessionSubscribeEvent event) {
@@ -49,11 +55,13 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
         String sessionId = accessor.getSessionId();
 
         // Only handle subscriptions to /topic/updates/{symbol}/{interval}
-        if (destination == null || !destination.startsWith("/topic/updates/")) return;
+        if (destination == null || !destination.startsWith("/topic/updates/"))
+            return;
 
         String[] parts = destination.split("/");
         // Expected: ["", "topic", "updates", "SYMBOL", "INTERVAL"]
-        if (parts.length < 5) return;
+        if (parts.length < 5)
+            return;
 
         String symbol = parts[3];
         String interval = parts[4];
@@ -65,7 +73,8 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
     private void sendSnapshot(String sessionId, String symbol, String interval, String destination) {
         try {
             List<Candle> history = timescaleRepository.getLatestCandles(symbol, interval, SNAPSHOT_CANDLE_LIMIT);
-            if (history == null || history.isEmpty()) return;
+            if (history == null || history.isEmpty())
+                return;
 
             // Append active candle from memory if available
             com.algo.core.SymbolState state = engine.getState(symbol);
@@ -73,18 +82,18 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
                 Candle active = state.getCurrentCandles().get(interval);
                 if (active != null) {
                     boolean shouldReplace = !history.isEmpty() &&
-                        active.getTimestamp().equals(history.get(history.size() - 1).getTimestamp());
+                            active.getTimestamp().equals(history.get(history.size() - 1).getTimestamp());
                     boolean shouldAppend = !history.isEmpty() &&
-                        active.getTimestamp().isAfter(history.get(history.size() - 1).getTimestamp());
-                    if (shouldReplace) history.set(history.size() - 1, active);
-                    else if (shouldAppend) history.add(active);
+                            active.getTimestamp().isAfter(history.get(history.size() - 1).getTimestamp());
+                    if (shouldReplace)
+                        history.set(history.size() - 1, active);
+                    else if (shouldAppend)
+                        history.add(active);
                 }
             }
 
-            // Recalculate indicators on the snapshot
-            historicalDataService.calculateAndPopulateIndicators(history, symbol, interval);
-
-            // Build a snapshot envelope
+            // Indicators are already calculated and stored in TimescaleDB.
+            // Recalculating them here for every websocket subscription was a major performance hit.
             Map<String, Object> snapshot = new HashMap<>();
             snapshot.put("type", "SNAPSHOT");
             snapshot.put("symbol", symbol);
@@ -93,11 +102,10 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
 
             // Send to the specific subscriber session using user-session routing
             messagingTemplate.convertAndSendToUser(
-                sessionId,
-                "/queue/snapshot",
-                mapper.writeValueAsString(snapshot),
-                createHeaders(sessionId)
-            );
+                    sessionId,
+                    "/queue/snapshot",
+                    mapper.writeValueAsString(snapshot),
+                    createHeaders(sessionId));
 
             log.debug("Snapshot: sent {} candles for {}/{} to session {}", history.size(), symbol, interval, sessionId);
         } catch (Exception e) {
@@ -106,9 +114,9 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
     }
 
     private org.springframework.messaging.MessageHeaders createHeaders(String sessionId) {
-        org.springframework.messaging.simp.SimpMessageHeaderAccessor headerAccessor =
-            org.springframework.messaging.simp.SimpMessageHeaderAccessor.create(
-                org.springframework.messaging.simp.SimpMessageType.MESSAGE);
+        org.springframework.messaging.simp.SimpMessageHeaderAccessor headerAccessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
+                .create(
+                        org.springframework.messaging.simp.SimpMessageType.MESSAGE);
         headerAccessor.setSessionId(sessionId);
         headerAccessor.setLeaveMutable(true);
         return headerAccessor.getMessageHeaders();

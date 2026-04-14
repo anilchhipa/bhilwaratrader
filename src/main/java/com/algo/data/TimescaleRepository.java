@@ -98,19 +98,10 @@ public class TimescaleRepository {
                         "PRIMARY KEY (symbol, interval)" +
                         ")");
 
-                // Pre-populate indices and top 10 SENSEX heavyweight components
+                // Pre-populate indices only
                 String[][] defaultSymbols = {
                         { "SENSEX", "BSE" },
-                        { "HDFCBANK", "BSE" },
-                        { "RELIANCE", "BSE" },
-                        { "ICICIBANK", "BSE" },
-                        { "INFY", "BSE" },
-                        { "LT", "BSE" },
-                        { "ITC", "BSE" },
-                        { "TCS", "BSE" },
-                        { "BHARTIARTL", "BSE" },
-                        { "AXISBANK", "BSE" },
-                        { "SBIN", "BSE" }
+                        { "NIFTY 50", "NSE" }
                 };
 
                 for (String[] symInfo : defaultSymbols) {

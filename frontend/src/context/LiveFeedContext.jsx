@@ -26,8 +26,10 @@ export const LiveFeedProvider = ({ children }) => {
     }, []);
 
     const decodeMessage = useCallback((msg) => {
-        // If message body is binary, decode via Proto
-        if (msg.binaryBody && msg.binaryBody.length > 0 && protoType) {
+        const isProto = msg.headers['content-type'] === 'application/x-protobuf';
+
+        // If explicitly proto, decode via Proto
+        if (isProto && msg.binaryBody && msg.binaryBody.length > 0 && protoType) {
             try {
                 const decoded = protoType.decode(msg.binaryBody);
                 const c = decoded.candle;
@@ -51,11 +53,17 @@ export const LiveFeedProvider = ({ children }) => {
                 };
             } catch (e) {
                 console.warn("LiveFeed: Proto decode failed", e);
+                // If proto fails, the data may still be JSON in string body
             }
         }
-        // Fallback to JSON if it's sent as a string payload
+
+        // Fallback to JSON for snapshots or if proto header is missing
         try {
-            return JSON.parse(msg.body);
+            if (msg.body) return JSON.parse(msg.body);
+            // In some binary brokers, the body is stringified binaryBody
+            const textDecoder = new TextDecoder();
+            const text = textDecoder.decode(msg.binaryBody);
+            return JSON.parse(text);
         } catch (e) {
             return null;
         }
@@ -89,7 +97,7 @@ export const LiveFeedProvider = ({ children }) => {
                 if (data && data.type === 'SNAPSHOT' && data.symbol && data.interval) {
                     const key = `${data.symbol}/${data.interval}`;
                     const listener = snapshotListenersRef.current[key];
-                    if (listener) listener(data.candles);
+                    if (listener) listener(data);
                 }
             });
 
@@ -177,8 +185,8 @@ export const useLiveFeed = (symbol, interval, onUpdate, onSnapshot) => {
         // Register snapshot listener if provided
         let unregisterSnapshot = () => { };
         if (context.registerSnapshotListener && snapshotRef.current) {
-            unregisterSnapshot = context.registerSnapshotListener(symbol, interval, (candles) => {
-                if (snapshotRef.current) snapshotRef.current(candles);
+            unregisterSnapshot = context.registerSnapshotListener(symbol, interval, (data) => {
+                if (snapshotRef.current) snapshotRef.current(data);
             });
         }
 

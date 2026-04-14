@@ -49,11 +49,12 @@ public class TelegramService {
                 });
     }
 
-    public void sendTrendFlipAlert(String symbol, String timeframe, int trend) {
+    public void sendTrendFlipAlert(String symbol, String timeframe, int trend, boolean isSecondary) {
         String emoji = trend == 1 ? "🚀" : "🔻";
         String trendName = trend == 1 ? "*BULLISH*" : "*BEARISH*";
-        String message = String.format("%s *%s (%s)*\nSuperTrend flipped %s",
-                emoji, symbol, timeframe, trendName);
+        String typeLabel = isSecondary ? "Trend (L)" : "Trend (S)";
+        String message = String.format("%s *%s (%s)*\n%s flipped %s",
+                emoji, symbol, timeframe, typeLabel, trendName);
         sendMessage(message);
     }
 }

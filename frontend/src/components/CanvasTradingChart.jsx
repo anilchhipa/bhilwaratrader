@@ -83,7 +83,10 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     useEffect(() => {
         const bc = new BroadcastChannel('grid_chart_sync');
         bc.onmessage = (e) => {
-            if (e.data.type === 'SYNC_ZOOM') setVisibleBars(e.data.count);
+            if (e.data.type === 'SYNC_ZOOM') {
+                setVisibleBars(e.data.count);
+                setYRange(null); // Ensure Y-axis snaps instantly to new X window limits
+            }
             if (e.data.type === 'SYNC_LOG_SCALE') setIsLog(e.data.enabled);
         };
         return () => bc.close();
@@ -97,7 +100,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const dData = useMemo(() => isReplayMode && replayIndex >= 0 ? replayDataRef.current.slice(0, replayIndex + 1) : liveDataRef.current, [data, isReplayMode, replayIndex]);
 
     const getMath = useCallback((w, h, d) => {
-        const pt = 26, pr = 38, pb = 20, cw = w - pr, ch = h - pb - pt, bs = cw / visibleBars;
+        const pt = 26, pr = 48, pb = 20, cw = w - pr, ch = h - pb - pt, bs = cw / visibleBars;
         const tot = d.length;
         const margin = Math.floor(visibleBars * 0.35); // 35% blank space from right
         const end = tot - scrollOffset.current + margin;
@@ -132,37 +135,37 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         if (!math) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save(); ctx.scale(dpr, dpr);
 
-        // GRID
+        // GRID (Disabled for cleaner look as per user request)
+        /*
         ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
         for (let i = 1; i < 9; i++) { const y = math.pt + (math.ch / 8) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke(); }
         for (let i = 1; i < 10; i++) { const x = (math.cw / 10) * i; ctx.beginPath(); ctx.moveTo(x, math.pt); ctx.lineTo(x, math.pt + math.ch); ctx.stroke(); }
+        */
 
-        // BACKGROUND WATERMARK (Brand Themed - Vibrant Signature)
+        // BACKGROUND WATERMARK (Brand Themed - Signature style)
         ctx.save();
         const fontSize = isMaximized ? 14 : (isGrid ? 8 : 10);
+        ctx.font = `700 ${fontSize * 1.3}px "Dancing Script"`;
 
-        ctx.font = `300 ${fontSize}px Inter`;
-        const tw = ctx.measureText(' Trader').width;
-        ctx.font = `900 ${fontSize}px Inter`;
-        const bw = ctx.measureText('Bhilwara').width;
+        const bhw = ctx.measureText('Bhilwara').width;
+        const trw = ctx.measureText('trader').width;
+        const gap = 4;
 
-        const x = math.cw - 8 - (bw + tw);
+        const x = math.cw - 12 - (bhw + trw + gap);
         const y = math.pt + math.ch - 8;
         ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
 
-        // Visibility Shadow (Dark contrast)
+        // Visibility Shadow
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
 
         // "Bhilwara" Part
-        ctx.font = `900 ${fontSize}px Inter`;
         ctx.fillStyle = '#f8fafc';
         ctx.fillText('Bhilwara', x, y);
 
-        // "Trader" Part
-        ctx.font = `300 ${fontSize}px Inter`;
+        // "trader" Part
         ctx.fillStyle = '#fbbf24';
-        ctx.fillText(' Trader', x + bw, y);
+        ctx.fillText('trader', x + bhw + gap, y);
         ctx.restore();
 
         // CLOUDS (Segmented Rendering to prevent overlapping gaps)
@@ -192,7 +195,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         const emas = ['ema15', 'ema15_5', 'ema15_15', 'ema15_15_15', 'ema15_15_15_15', 'ema15_15_15_15_30'];
         emas.forEach((k, idx) => {
             if (!vis[k.toUpperCase()]) return;
-            ctx.strokeStyle = COLORS.emas[idx]; ctx.lineWidth = 1.0; ctx.beginPath();
+            ctx.strokeStyle = COLORS.emas[idx]; ctx.lineWidth = 0.3; ctx.beginPath();
             math.slice.forEach((c, i) => { const x = math.i2x(math.start + i), y = math.p2y(c[k]); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
             ctx.stroke();
         });
@@ -221,13 +224,47 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             ctx.shadowBlur = 0;
         });
 
+        // LIVE PRICE LINE
+        const lastCandle = dData[dData.length - 1];
+        if (lastCandle) {
+            const lastPrice = lastCandle.close;
+            const y = math.p2y(lastPrice);
+            if (y >= math.pt && y <= math.pt + math.ch) {
+                const isUp = lastCandle.close >= lastCandle.open;
+                ctx.save();
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = isUp ? COLORS.bull : COLORS.bear;
+                ctx.lineWidth = 0.3;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(math.cw, y);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
         // Y-AXIS (Compact Sidebar)
         ctx.fillStyle = '#0a0f1d'; ctx.fillRect(math.cw, math.pt, math.pr, math.ch);
         ctx.fillStyle = '#cbd5e1'; ctx.font = '9px Inter'; ctx.textAlign = 'center';
         for (let i = 0; i < 9; i++) {
             const y = math.pt + (math.ch / 8) * i;
-            ctx.fillText(math.y2p(y).toFixed(symbol.includes('SENSEX') ? 0 : 1), math.cw + (math.pr / 2), y + 3.5);
+            ctx.fillText(math.y2p(y).toFixed(symbol.includes('SENSEX') || symbol.includes('NIFTY') ? 0 : 2), math.cw + (math.pr / 2), y + 3.5);
         }
+
+        // HIGHLIGHT LAST PRICE ON Y-AXIS
+        if (lastCandle) {
+            const lastPrice = lastCandle.close;
+            const y = math.p2y(lastPrice);
+            if (y >= math.pt && y <= math.pt + math.ch) {
+                const isUp = lastCandle.close >= lastCandle.open;
+                ctx.fillStyle = isUp ? COLORS.bull : COLORS.bear;
+                ctx.fillRect(math.cw, y - 9, math.pr, 18);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 10px Inter';
+                ctx.fillText(lastPrice.toFixed(2), math.cw + (math.pr / 2), y + 3.5);
+            }
+        }
+
         if (isLog) {
             ctx.fillStyle = '#3b82f6'; ctx.font = 'bold 8px Inter';
             ctx.fillText('LOG', math.cw + (math.pr / 2), math.pt + 8);
@@ -282,7 +319,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         const mouse = mouseRef.current;
 
         if (mouse.x > 0 && mouse.x < math.cw && mouse.y > math.pt && mouse.y < math.pt + math.ch) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.textAlign = 'center';
+            ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 0.2; ctx.textAlign = 'center';
             ctx.beginPath(); ctx.moveTo(0, mouse.y); ctx.lineTo(math.cw, mouse.y); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(mouse.x, math.pt); ctx.lineTo(mouse.x, math.pt + math.ch); ctx.stroke();
 
@@ -344,15 +381,15 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
 
     // Seed chart from WebSocket snapshot delivery (zero REST calls in scanner mode)
-    const snapshotCallback = useCallback((candles) => {
-        if (!candles || candles.length === 0) {
+    const snapshotCallback = useCallback((data) => {
+        if (!data || !data.candles || data.candles.length === 0) {
             liveDataRef.current = [];
             replayDataRef.current = [];
             setData([]);
             setLoading(false);
             return;
         }
-        const normalized = candles.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+        const normalized = data.candles.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
         liveDataRef.current = normalized;
         replayDataRef.current = normalized;
         setData(normalized); // trigger one re-render to update dData memo
@@ -599,8 +636,8 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
                     {loading && <div className="loader-mini" style={{ width: '12px', height: '12px', border: '2px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />}
                     <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                     <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', padding: '1px' }}>
-                        <button onClick={() => setIsReplayMode(!isReplayMode)} title="Replay Mode" style={{ background: isReplayMode ? '#ef4444' : 'transparent', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>
-                            {isReplayMode ? '✕' : '⟳'}
+                        <button onClick={() => setIsReplayMode(!isReplayMode)} title="Toggle Replay Mode" style={{ background: isReplayMode ? '#ef4444' : 'transparent', color: isReplayMode ? '#fff' : '#60a5fa', border: 'none', fontSize: '10px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>
+                            {isReplayMode ? '✕' : '⏪'}
                         </button>
                         {isReplayMode && <button onClick={() => setIsReplaying(!isReplaying)} style={{ background: '#3b82f6', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', marginLeft: '4px' }}>{isReplaying ? '⏸' : '▶'}</button>}
                     </div>

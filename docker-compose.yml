@@ -39,7 +39,7 @@ services:
       - KITE_PASSWORD=A1S2$#@!aaa
       - KITE_TOTP_SECRET=NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5
       - TELEGRAM_BOT_TOKEN=8311779416:AAEbw6JNO-NJl3ZmY5mj-kRQGmK-FZ0qNbQ
-      - TELEGRAM_CHAT_ID=787284320
+      - TELEGRAM_CHAT_ID=@bhilwaratrader
     depends_on:
       - timescale
       - redis

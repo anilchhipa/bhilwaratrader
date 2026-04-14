@@ -95,7 +95,7 @@ public class Strategy {
         updateSnapshots();
 
         // 3. Calculate the first tick of the NEW candle for EMAs
-        updateIndicators(newCandle.getLow(), false);
+        updateIndicators(newCandle.getClose(), false);
 
         if (stma != null) {
             stma.commit();
@@ -116,7 +116,7 @@ public class Strategy {
     public synchronized void updateLastCandle(Candle candle) {
         // Always calculate live updates from the STABLE baseline (updateLast = true)
         // so that intra-candle volatility doesn't permanently skew the EMAs
-        updateIndicators(candle.getLow(), true);
+        updateIndicators(candle.getClose(), true);
         if (stma != null)
             stma.updateLive(candle);
         if (stma2 != null)
@@ -163,7 +163,8 @@ public class Strategy {
     }
 
     private double calculateEMA(double value, double currentEMA, int period) {
-        if (currentEMA == 0)
+        // Correct snap logic: if zero, initialize to 'value'
+        if (currentEMA <= 0 || Double.isNaN(currentEMA))
             return value;
         double k = 2.0 / (period + 1);
         return value * k + currentEMA * (1 - k);

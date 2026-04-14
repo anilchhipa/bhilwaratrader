@@ -102,12 +102,12 @@ public class Engine {
      * candle
      * close.
      */
-    private void onTrendFlip(String symbol, String timeframe, int trend) {
+    private void onTrendFlip(String symbol, String timeframe, int trend, boolean isSecondary) {
         // Dispatch alert to mobile (Telegram) asynchronously
         CompletableFuture.runAsync(() -> {
             try {
                 if (telegramService != null) {
-                    telegramService.sendTrendFlipAlert(symbol, timeframe, trend);
+                    telegramService.sendTrendFlipAlert(symbol, timeframe, trend, isSecondary);
                 }
             } catch (Exception e) {
                 logger.error("Error sending Telegram alert: {}", e.getMessage());
@@ -120,7 +120,7 @@ public class Engine {
      */
     public void sendStartupMessage() {
         if (telegramService != null) {
-            telegramService.sendMessage("🚀 *Algo Engine Online*\nBhilwaraTrader bot is monitoring 80+ symbols.");
+            telegramService.sendMessage("🚀 *Market Monitor Online*\nSystem is tracking active symbols.");
         }
     }
 

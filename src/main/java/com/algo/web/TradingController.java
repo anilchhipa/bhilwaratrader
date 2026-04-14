@@ -224,8 +224,9 @@ public class TradingController {
                 // Append the current active/incomplete candle from memory
                 appendActiveCandle(symbol, dbInterval, history);
 
-                // Re-calculate indicators on the fly
-                historicalDataService.calculateAndPopulateIndicators(history, symbol, dbInterval);
+                // Indicators are already pre-computed and stored in TimescaleDB by the
+                // data ingestion pipeline. Re-calculating here on every request was a
+                // major performance bottleneck. Skip it.
 
                 logger.debug("Serving {} candles from TimescaleDB for {} ({})", history.size(), symbol, interval);
 
@@ -455,6 +456,32 @@ public class TradingController {
         }
 
         return ResponseEntity.ok(Map.of("message", "Symbols flushed", "count", symbols.size()));
+    }
+
+    @PostMapping("/symbols/purge")
+    @SuppressWarnings("unchecked")
+    public ResponseEntity<?> purgeSymbols(@RequestBody Map<String, Object> req) {
+        List<String> symbols = (List<String>) req.get("symbols");
+        if (symbols == null || symbols.isEmpty())
+            return ResponseEntity.badRequest().body("No symbols provided");
+
+        for (String symbol : symbols) {
+            String token = tokenManager.getToken(symbol);
+
+            // 1. Flush Data
+            timescaleRepository.deleteCandleData(symbol);
+            redisClient.clearSymbolData(symbol);
+
+            // 2. Untrack
+            timescaleRepository.removeTrackedSymbol(symbol);
+            engine.unregisterSymbol(symbol);
+            tokenManager.removeSymbol(symbol);
+
+            if (token != null) {
+                liveFeed.unsubscribe(java.util.Collections.singleton(token));
+            }
+        }
+        return ResponseEntity.ok(Map.of("message", "Symbols purged", "count", symbols.size()));
     }
 
     @PostMapping("/order/flush-all")

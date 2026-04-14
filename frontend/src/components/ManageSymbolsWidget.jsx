@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../config';
 
-const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrackedData, tracked: propTracked }) => {
+const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrackedData, tracked: propTracked, initialSearch }) => {
     const [categories, setCategories] = useState({ STOCKS: [], FUTURES: [], OPTIONS: [] });
     // Keep local states but they can be synced with props
     const [tracked, setTracked] = useState([]);
@@ -26,6 +26,12 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
         if (!isOpen) return;
         fetchCategorized();
     }, [isOpen]);
+
+    useEffect(() => {
+        if (isOpen && initialSearch) {
+            handleSearch(initialSearch);
+        }
+    }, [isOpen, initialSearch]);
 
     // Sync with props
     useEffect(() => {
@@ -105,19 +111,20 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
 
     const handleFlush = async () => {
         if (selectedForFlush.length === 0) return;
-        if (!window.confirm(`Flush data for ${selectedForFlush.length} symbols?`)) return;
+        if (!window.confirm(`CRITICAL: Flush data and UNTRACK ${selectedForFlush.length} symbols? This will remove them from the screen completely.`)) return;
         try {
-            await axios.post(`${API_BASE}/api/symbols/flush`, { symbols: selectedForFlush });
+            await axios.post(`${API_BASE}/api/symbols/purge`, { symbols: selectedForFlush });
             setSelectedForFlush([]);
+            if (onUpdate) onUpdate(); // Refresh the tracked list in parent
         } catch (err) { }
     };
 
     const handleFlushAll = async () => {
-        if (!window.confirm("CRITICAL: Flush ALL?")) return;
-        try {
-            await axios.post(`${API_BASE}/api/symbols/flush-all`);
-            setSelectedForFlush([]);
-        } catch (err) { }
+        if (selectedForFlush.length === 0) {
+            alert("Please select symbols in the list below to flush.");
+            return;
+        }
+        await handleFlush();
     };
 
     const handleSearch = async (q) => {
@@ -136,7 +143,7 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
     };
 
     const startDrag = (e) => {
-        if (e.target.closest('.modal-header') && !e.target.closest('.close-btn') && !e.target.closest('.spot-filter') && !e.target.closest('.search-box-container')) {
+        if (e.target.closest('.premium-widget-header') && !e.target.closest('.premium-widget-close-btn') && !e.target.closest('.spot-filter') && !e.target.closest('.search-box-container')) {
             setIsDragging(true);
             offsetRef.current = {
                 x: e.clientX - position.x,
@@ -171,7 +178,7 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
 
     const renderCategory = (label, items, isOption = false) => (
         <div className="category-group">
-            <label>{label}</label>
+            <label className="group-label">{label}</label>
             <div className="checkbox-list">
                 {items.map(inst => {
                     const isTracked = tracked.includes(inst.symbol);
@@ -186,7 +193,7 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
                         else highlightClass = "otm-highlight";
                     }
                     return (
-                        <div key={inst.symbol} className={`checkbox-item ${highlightClass}`}>
+                        <div key={inst.symbol} className={`checkbox-item premium-checkbox ${highlightClass}`}>
                             <label>
                                 <input type="checkbox" checked={isTracked} onChange={() => toggleSymbol(inst, isTracked)} />
                                 <span className="inst-name">{displayName}</span>
@@ -201,94 +208,105 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
 
     return (
         <div
-            className="manage-symbols-modal floating-widget-container"
+            className="premium-widget-panel"
             style={{
                 position: 'fixed',
                 left: `${position.x}px`,
                 top: `${position.y}px`,
                 zIndex: 1200,
-                width: '900px',
-                pointerEvents: 'auto'
+                width: '940px',
+                height: '80vh'
             }}
         >
-            <div className={`modal-content ${isDragging ? 'dragging' : ''}`} style={{ width: '100%', margin: 0 }}>
-                <div className="modal-header" onMouseDown={startDrag} style={{ cursor: 'move', userSelect: 'none' }}>
-                    <div className="title-area">
-                        <h2>Manage Symbols</h2>
-                        <div className="spot-filter" onMouseDown={e => e.stopPropagation()}>
-                            <label>SENSEX SPOT {trackedData['SENSEX'] ? <span className="live-badge">(Live)</span> : ""}</label>
-                            <div className="spot-input-wrapper">
-                                <input
-                                    type="number"
-                                    value={spotPrice}
-                                    onChange={(e) => setSpotPrice(e.target.value)}
-                                />
-                                <span className="spot-unit">₹</span>
-                            </div>
-                        </div>
-                        <div className="search-box-container" onMouseDown={e => e.stopPropagation()}>
+            <div className={`premium-widget-header ${isDragging ? 'dragging' : ''}`} onMouseDown={startDrag} style={{ cursor: 'move' }}>
+                <div className="premium-widget-title" style={{ gap: '24px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span className="premium-widget-icon">📡</span>
+                        <span>Manage Symbols</span>
+                    </div>
+
+                    <div className="header-divider" style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)' }}></div>
+
+                    <div className="spot-filter" onMouseDown={e => e.stopPropagation()} style={{ marginTop: 0 }}>
+                        <label className="group-label" style={{ fontSize: '9px', marginBottom: '4px' }}>SENSEX SPOT</label>
+                        <div className="spot-input-wrapper">
                             <input
-                                type="text"
-                                className="search-input"
-                                placeholder="Search any symbol (e.g. NIFTY, TCS...)"
-                                value={searchQuery}
-                                onChange={(e) => handleSearch(e.target.value)}
+                                type="number"
+                                value={spotPrice}
+                                onChange={(e) => setSpotPrice(e.target.value)}
+                                style={{ height: '28px', fontSize: '12px', width: '120px' }}
                             />
-                            {isSearching && <div className="search-loader">...</div>}
+                            <span className="spot-unit" style={{ fontSize: '11px' }}>₹</span>
                         </div>
                     </div>
-                    <button className="close-btn" onClick={onClose}>&times;</button>
-                </div>
 
-                <div className="manage-body">
-                    {searchQuery.length >= 2 && (
-                        <div className="categories-container search-results-container" style={{ marginBottom: '24px' }}>
-                            {renderCategory(`Search Results for "${searchQuery}"`, searchResults, false)}
-                        </div>
-                    )}
-
-                    {loading && <div className="loader">Loading instrument lists...</div>}
-                    <div className="categories-container">
-                        {renderCategory("Sensex Stocks", categories.STOCKS)}
-                        {renderCategory("Futures", categories.FUTURES)}
-                        {renderCategory("Call Options" + optHeaderSuffix, callOptions, true)}
-                        {renderCategory("Put Options" + optHeaderSuffix, putOptions, true)}
-
-                        <div className="category-group flush-group">
-                            <div className="group-header">
-                                <label>Active Watchlist</label>
-                                <button className="flush-all-link" onClick={handleFlushAll}>Flush ALL Global Data</button>
-                            </div>
-                            <div className="checkbox-list">
-                                {tracked.map(s => (
-                                    <div key={s} className={`checkbox-item flush-item ${selectedForFlush.includes(s) ? 'selected' : ''}`}>
-                                        <label>
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedForFlush.includes(s)}
-                                                onChange={() => setSelectedForFlush(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])}
-                                            />
-                                            <span className="inst-name">{s}</span>
-                                        </label>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                    <div className="search-box-container" onMouseDown={e => e.stopPropagation()}>
+                        <input
+                            type="text"
+                            className="search-input"
+                            placeholder="Quick search symbols..."
+                            value={searchQuery}
+                            onChange={(e) => handleSearch(e.target.value)}
+                            style={{ height: '28px', fontSize: '12px', width: '220px' }}
+                        />
+                        {isSearching && <div className="search-loader" style={{ right: '10px' }}>...</div>}
                     </div>
                 </div>
+                <button className="premium-widget-close-btn" onClick={onClose}>✕</button>
+            </div>
 
-                <div className="modal-footer">
-                    <div className="footer-actions">
-                        {selectedForFlush.length > 0 && (
-                            <button className="pill-btn active" onClick={handleFlush} style={{ background: 'var(--accent-crimson)' }}>
-                                Flush Selected ({selectedForFlush.length})
-                            </button>
-                        )}
-                        <button className="pill-btn active" onClick={onClose} style={{ padding: '8px 32px' }}>Done</button>
+            <div className="premium-widget-body">
+                {searchQuery.length >= 2 && (
+                    <div className="categories-container search-results-container" style={{ marginBottom: '32px' }}>
+                        {renderCategory(`Search Results for "${searchQuery}"`, searchResults, false)}
+                    </div>
+                )}
+
+                {loading && <div className="loader" style={{ padding: '20px', color: 'var(--accent-neon-blue)', fontSize: '12px' }}>Loading instrument lists...</div>}
+
+                <div className="categories-container" style={{ gap: '24px' }}>
+                    {renderCategory("Sensex Stocks", categories.STOCKS)}
+                    {renderCategory("Futures", categories.FUTURES)}
+                    {renderCategory("Call Options" + optHeaderSuffix, callOptions, true)}
+                    {renderCategory("Put Options" + optHeaderSuffix, putOptions, true)}
+
+                    <div className="category-group flush-group" style={{ border: '1px solid rgba(239, 68, 68, 0.2)', background: 'rgba(239, 68, 68, 0.02)' }}>
+                        <div className="group-header">
+                            <label className="group-label" style={{ color: '#f87171 !important' }}>Active Watchlist</label>
+                            <button className="flush-all-link" onClick={handleFlushAll}>Flush Global Cache</button>
+                        </div>
+                        <div className="checkbox-list">
+                            {tracked.map(s => (
+                                <div key={s} className={`checkbox-item premium-checkbox flush-item ${selectedForFlush.includes(s) ? 'selected' : ''}`}>
+                                    <label>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedForFlush.includes(s)}
+                                            onChange={() => setSelectedForFlush(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])}
+                                        />
+                                        <span className="inst-name">{s}</span>
+                                    </label>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </div>
+
+            <div className="premium-widget-footer">
+                <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Total Tracked:</span>
+                    <span style={{ fontSize: '11px', color: 'white', fontWeight: '800' }}>{tracked.length} symbols</span>
+                </div>
+                {selectedForFlush.length > 0 && (
+                    <button className="flush-all-link" onClick={handleFlush} style={{ height: '32px', padding: '0 20px', background: 'rgba(239, 68, 68, 0.1)' }}>
+                        Flush {selectedForFlush.length} Items
+                    </button>
+                )}
+                <button className="pill-btn active" onClick={onClose} style={{ height: '32px', minWidth: '100px', fontSize: '12px' }}>Done</button>
+            </div>
         </div>
+
     );
 };
 

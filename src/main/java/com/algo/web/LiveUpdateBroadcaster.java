@@ -59,9 +59,15 @@ public class LiveUpdateBroadcaster {
                         .setCandle(dataBuilder.build())
                         .build();
 
-                // Send raw binary to the topic
+                // Send raw binary with a Protobuf header
+                org.springframework.messaging.simp.SimpMessageHeaderAccessor headerAccessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
+                        .create();
+                headerAccessor
+                        .setContentType(org.springframework.util.MimeTypeUtils.parseMimeType("application/x-protobuf"));
+                headerAccessor.setLeaveMutable(true);
+
                 messagingTemplate.convertAndSend("/topic/updates/" + symbol + "/" + interval,
-                        binaryUpdate.toByteArray());
+                        binaryUpdate.toByteArray(), headerAccessor.getMessageHeaders());
             } catch (Exception e) {
                 // Fallback to JSON if Proto fails
                 JSONObject payload = new JSONObject();

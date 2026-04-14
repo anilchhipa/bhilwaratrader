@@ -74,3 +74,10 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+.glow-highlight {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.8) !important;
+  border-radius: 8px !important;
+  transition: box-shadow 0.3s ease-in-out;
+  z-index: 10;
+}
