@@ -53,6 +53,15 @@ public class IndicatorConfig {
     @Value("${trading.paper-mode:false}")
     private boolean paperMode;
 
+    @Value("${indicator.atr.threshold:0.15}")
+    private double atrThreshold;
+
+    @Value("${indicator.renko.brickSize:10.0}")
+    private double renkoBrickSize;
+
+    @Value("${indicator.renko.sourceTimeframe:2hour}")
+    private String renkoSourceTimeframe;
+
     // --- Getters ---
 
     public int getEmaPeriod1() {
@@ -105,6 +114,18 @@ public class IndicatorConfig {
 
     public boolean isPaperMode() {
         return paperMode;
+    }
+
+    public double getAtrThreshold() {
+        return atrThreshold;
+    }
+
+    public double getRenkoBrickSize() {
+        return renkoBrickSize;
+    }
+
+    public String getRenkoSourceTimeframe() {
+        return renkoSourceTimeframe;
     }
 
     @Override

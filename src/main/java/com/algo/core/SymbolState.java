@@ -14,7 +14,13 @@ import org.slf4j.LoggerFactory;
 public class SymbolState {
     private static final Logger logger = LoggerFactory.getLogger(SymbolState.class);
     private final String symbol;
-    private final String[] timeframes = { "1min", "3min", "5min", "15min" };
+    private final String[] timeframes = { "1min", "3min", "5min", "15min", "2hour" };
+    private final IndicatorConfig indicatorConfig;
+
+    // Renko State
+    private final java.util.List<RenkoBrick> renkoBricks = java.util.Collections
+            .synchronizedList(new java.util.ArrayList<>());
+    private double renkoPivot = 0;
 
     // Timeframe -> List of historical Candles (The "Hot Buffer")
     private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
@@ -63,6 +69,7 @@ public class SymbolState {
         this.symbol = symbol;
         this.onCandleComplete = onCandleComplete;
         this.onTrendFlip = onTrendFlip;
+        this.indicatorConfig = indicatorConfig;
         for (String tf : timeframes) {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
             strategies.put(tf, new Strategy(indicatorConfig));
@@ -77,13 +84,13 @@ public class SymbolState {
      * Returns the set of timeframes that were actually modified (for selective
      * broadcast).
      */
-    public java.util.Set<String> update(double price, double delta, java.time.LocalDateTime time) {
+    public java.util.Set<String> update(double price, double quantity, java.time.LocalDateTime time) {
         java.util.Set<String> dirty = new java.util.HashSet<>(4);
         for (String tf : timeframes) {
             ReentrantLock lock = tfLocks.get(tf);
             lock.lock();
             try {
-                if (updateTimeframe(tf, price, delta, time)) {
+                if (updateTimeframe(tf, price, quantity, time)) {
                     dirty.add(tf);
                 }
             } finally {
@@ -180,7 +187,7 @@ public class SymbolState {
     }
 
     /** Returns true if any state changed (price/indicator updated). */
-    private boolean updateTimeframe(String tf, double price, double delta, java.time.LocalDateTime time) {
+    private boolean updateTimeframe(String tf, double price, double quantity, java.time.LocalDateTime time) {
         java.time.LocalDateTime start = getIntervalStartTime(time, tf);
         Candle current = currentCandles.get(tf);
 
@@ -213,9 +220,7 @@ public class SymbolState {
                 }
             }
 
-            double tickQty = Math.abs(delta);
-            Candle newCandle = new Candle(price, price, price, price, tickQty, start);
-            newCandle.setDelta(delta); // First tick of new candle
+            Candle newCandle = new Candle(price, price, price, price, quantity, start);
 
             Strategy macroStrategy = strategies.get("15min");
             int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
@@ -229,8 +234,21 @@ public class SymbolState {
             Integer lastConfirmed1 = confirmedTrendMap1.get(tf);
             if (trendAtClose1 != null && lastConfirmed1 != null && !trendAtClose1.equals(lastConfirmed1)) {
                 lastFlipTimes.put(tf, current.getTimestamp());
+
+                // ATR Volatility Filter: Only notify if market is moving enough to beat theta
+                // decay
+                double atr = current.getAtr() != null ? current.getAtr() : 0;
+                boolean isVolatile = atr >= indicatorConfig.getAtrThreshold();
+
                 if (onTrendFlip != null && shouldNotify) {
-                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
+                    if (isVolatile) {
+                        onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
+                    } else {
+                        logger.info(
+                                "SymbolState [{} {}]: Trend flipped but ATR ({}) below threshold ({}). Alert suppressed.",
+                                symbol, tf, atr, indicatorConfig.getAtrThreshold());
+                    }
+
                 }
             }
             if (trendAtClose1 != null) {
@@ -240,7 +258,8 @@ public class SymbolState {
             Integer trendAtClose2 = current.getStTrend2();
             Integer lastConfirmed2 = confirmedTrendMap2.get(tf);
             if (trendAtClose2 != null && lastConfirmed2 != null && !trendAtClose2.equals(lastConfirmed2)) {
-                if (onTrendFlip != null && shouldNotify) {
+                double atr = current.getAtr() != null ? current.getAtr() : 0;
+                if (onTrendFlip != null && shouldNotify && atr >= indicatorConfig.getAtrThreshold()) {
                     onTrendFlip.onFlip(this.symbol, tf, trendAtClose2, true);
                 }
             }
@@ -263,23 +282,57 @@ public class SymbolState {
 
             // Only update if price actually changed (skip identical tick noise)
             boolean priceChanged = (price != current.getClose());
-            if (!priceChanged && delta == 0)
+            if (!priceChanged && quantity == 0)
                 return false;
 
             current.setHigh(Math.max(current.getHigh(), price));
             current.setLow(Math.min(current.getLow(), price));
             current.setClose(price);
 
-            // Accumulate Volume and Delta per tick
-            double tickQty = Math.abs(delta);
-            current.setVolume(current.getVolume() + tickQty);
-            current.setDelta(current.getDelta() + delta);
+            current.setVolume(current.getVolume() + quantity);
 
             strategies.get(tf).updateLastCandle(current);
+
+            if ("2hour".equals(tf)) {
+                updateRenkoBricks(price, time);
+            }
         }
 
         updateIndicatorMap(tf, current);
         return true;
+    }
+
+    private synchronized void updateRenkoBricks(double price, java.time.LocalDateTime time) {
+        double brickSize = indicatorConfig.getRenkoBrickSize();
+        if (brickSize <= 0)
+            return;
+
+        if (renkoPivot == 0) {
+            renkoPivot = price;
+            return;
+        }
+
+        while (price >= renkoPivot + brickSize) {
+            double newOpen = renkoPivot;
+            double newClose = renkoPivot + brickSize;
+            renkoBricks.add(new RenkoBrick(time, time, newOpen, newClose));
+            renkoPivot = newClose;
+        }
+
+        while (price <= renkoPivot - brickSize) {
+            double newOpen = renkoPivot;
+            double newClose = renkoPivot - brickSize;
+            renkoBricks.add(new RenkoBrick(time, time, newOpen, newClose));
+            renkoPivot = newClose;
+        }
+
+        if (renkoBricks.size() > 500) {
+            renkoBricks.subList(0, 100).clear();
+        }
+    }
+
+    public java.util.List<RenkoBrick> getRenkoBricks() {
+        return new java.util.ArrayList<>(renkoBricks);
     }
 
     /**
@@ -319,9 +372,18 @@ public class SymbolState {
 
         // SuperTrend 2 (ST100)
         safePut(values, "stMa2", current.getStMa2());
-        safePut(values, "stUp2", current.getStUp2());
         safePut(values, "stDn2", current.getStDn2());
         safePut(values, "stTrend2", (double) (current.getStTrend2() != null ? current.getStTrend2() : 0));
+
+        // ATR Volatility
+        safePut(values, "atr", current.getAtr());
+
+        // Signal System
+        if (current.getSignal() != null) {
+            values.put("signal", (double) current.getSignal());
+        }
+        safePut(values, "tradeScore", current.getTradeScore());
+        safePut(values, "er", current.getEr());
     }
 
     private void safePut(Map<String, Double> map, String key, Double value) {
@@ -384,4 +446,5 @@ public class SymbolState {
             return new java.util.ArrayList<>(buffer);
         }
     }
+
 }

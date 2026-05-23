@@ -26,10 +26,14 @@ public class Candle {
     private Double stUp2;
     private Double stDn2;
     private Integer stTrend2;
+    private Double atr;
 
     private Double volume;
-    private Double delta; // Net Order Flow (Buy Vol - Sell Vol)
-    private Integer whaleSignal; // 1 = Whale Buy, -1 = Whale Sell/Fear
+
+    // --- Signal & Score fields ---
+    private Integer signal; // +1 = BUY, -1 = SELL, 0 = NO TRADE
+    private Double tradeScore; // Bayesian composite score (0.0 – 8.0)
+    private Double er; // Efficiency Ratio (0.0 – 1.0)
 
     public Candle(double open, double high, double low, double close, double volume, LocalDateTime timestamp) {
         this.open = open;
@@ -46,14 +50,6 @@ public class Candle {
 
     public void setVolume(Double volume) {
         this.volume = volume;
-    }
-
-    public Double getDelta() {
-        return delta != null ? delta : 0.0;
-    }
-
-    public void setDelta(Double delta) {
-        this.delta = delta;
     }
 
     public double getOpen() {
@@ -209,12 +205,35 @@ public class Candle {
         this.stTrend2 = stTrend2;
     }
 
-    public Integer getWhaleSignal() {
-        return whaleSignal != null ? whaleSignal : 0;
+    public Double getAtr() {
+        return atr != null ? atr : 0.0;
     }
 
-    public void setWhaleSignal(Integer whaleSignal) {
-        this.whaleSignal = whaleSignal;
+    public void setAtr(Double atr) {
+        this.atr = atr;
     }
 
+    public Integer getSignal() {
+        return signal;
+    }
+
+    public void setSignal(Integer signal) {
+        this.signal = signal;
+    }
+
+    public Double getTradeScore() {
+        return tradeScore;
+    }
+
+    public void setTradeScore(Double tradeScore) {
+        this.tradeScore = tradeScore;
+    }
+
+    public Double getEr() {
+        return er;
+    }
+
+    public void setEr(Double er) {
+        this.er = er;
+    }
 }

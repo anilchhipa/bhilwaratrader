@@ -10,7 +10,11 @@ public class TokenManager {
     private Map<String, String> symbolToExchange = new ConcurrentHashMap<>();
 
     public TokenManager() {
-        // Symbols will be loaded from DB and registered via register()
+        // Fallback for core indices in case resolution fails
+        updateToken("SENSEX", "265");
+        updateToken("NIFTY 50", "256001");
+        symbolToExchange.put("SENSEX", "BSE");
+        symbolToExchange.put("NIFTY 50", "NSE");
     }
 
     /**

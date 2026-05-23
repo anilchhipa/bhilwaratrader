@@ -100,8 +100,9 @@ public class TradingApplication {
 
     @Bean
     public com.algo.core.MarketSessionManager marketSessionManager(Engine engine,
-            com.algo.service.HistoricalDataService historicalDataService, TokenManager tokenManager) {
-        return new com.algo.core.MarketSessionManager(engine, historicalDataService, tokenManager);
+            com.algo.service.HistoricalDataService historicalDataService, TokenManager tokenManager,
+            ZerodhaClient zerodhaClient) {
+        return new com.algo.core.MarketSessionManager(engine, historicalDataService, tokenManager, zerodhaClient);
     }
 
     @Bean
@@ -151,10 +152,16 @@ public class TradingApplication {
                     // 2b. Auto-remove expired/invalid symbols (e.g. expired options & futures)
                     // If a symbol could not be resolved, it means Zerodha no longer lists it
                     // (contract expired or invalid). Clean it up automatically.
+                    // IMPORTANT: Never auto-remove core indices SENSEX and NIFTY 50.
                     java.util.List<String> expiredSymbols = new java.util.ArrayList<>();
                     for (String symbol : new java.util.ArrayList<>(tokenManager.getAllSymbols())) {
                         if (tokenManager.getToken(symbol) == null) {
-                            expiredSymbols.add(symbol);
+                            if (!symbol.equals("SENSEX") && !symbol.equals("NIFTY 50")) {
+                                expiredSymbols.add(symbol);
+                            } else {
+                                System.err.println("WARNING: Could not resolve token for core index " + symbol
+                                        + ". Keeping it in watchlist (fallback might be needed).");
+                            }
                         }
                     }
                     if (!expiredSymbols.isEmpty()) {

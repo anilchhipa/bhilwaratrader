@@ -5,17 +5,23 @@ import { formatSymbol } from '../helpers/formatSymbol';
 import { useLiveFeed } from '../context/LiveFeedContext';
 
 const COLORS = {
-    bull: '#26a69a', bear: '#ef5350', bg: '#020617',
+    bg: '#020617', // Deep Obsidian
+    bull: '#10b981', // Emerald
+    bear: '#f43f5e', // Rose
+    text: '#f8fafc',
+    grid: 'rgba(30, 41, 59, 0.4)',
+    crosshair: 'rgba(255, 255, 255, 0.3)',
     emas: ['#ffffff', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#06b6d4'],
-    stBull: 'rgba(0, 98, 255, 0.35)', stBear: 'rgba(239, 68, 68, 0.35)', st2: 'rgba(168,85,247,0.1)'
+    stBull: 'rgba(0, 110, 255, 0.45)', stBear: 'rgba(255, 35, 35, 0.45)', st2: 'rgba(168, 85, 247, 0.15)'
 };
 
-const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGrid = false, isMaximized = false, onMaximize, onPriceUpdate, externalVisibility, onVisibilityUpdate, onIntervalChange, themeColors, symbolPrices, hideMaximize = false, preloadedData, isHighlighted = false }) => {
+const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGrid = false, isMaximized = false, onMaximize, onPriceUpdate, externalVisibility, onVisibilityUpdate, onIntervalChange, themeColors, symbolPrices, hideMaximize = false, preloadedData, isHighlighted = false, globalResetTrigger, onDelete }) => {
     const [data, setData] = useState([]);
     const [interval, setTimeframe] = useState(initialInterval);
     const [loading, setLoading] = useState(true);
     // Canonical live data lives in a ref — avoids React re-renders on every tick
     const liveDataRef = useRef([]);
+    const renkoBricksRef = useRef([]);
     // Pending RAF handle for live-tick renders
     const pendingRafRef = useRef(null);
 
@@ -27,6 +33,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const [isReplayMode, setIsReplayMode] = useState(false);
     const [replayIndex, setReplayIndex] = useState(-1);
     const [isReplaying, setIsReplaying] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
 
     // NAVIGATION STATE
@@ -41,7 +48,14 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const draggingOrderRef = useRef(null);
     const dragStart = useRef(null);
 
+
     const [timeRemaining, setTimeRemaining] = useState('--:--');
+    const [config, setConfig] = useState(null);
+
+    useEffect(() => {
+        axios.get(`${API_BASE}/api/config`).then(res => setConfig(res.data)).catch(err => console.error("Config load fail", err));
+    }, []);
+
     useEffect(() => {
         const calculateRemaining = () => {
             if (isReplayMode || !interval.includes('min')) return '--:--';
@@ -61,6 +75,22 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         return () => clearInterval(timer);
     }, [interval, isReplayMode]);
 
+    const handleDeleteSymbol = (e) => {
+        e.stopPropagation();
+        setShowDeleteConfirm(true);
+    };
+
+    const confirmDeleteSymbol = async () => {
+        try {
+            await axios.post(`${API_BASE}/api/symbols/purge`, { symbols: [symbol] });
+            localStorage.removeItem(`orders_${symbol}`);
+            if (onDelete) onDelete();
+        } catch (err) {
+            console.error("Purge failure:", err);
+        }
+        setShowDeleteConfirm(false);
+    };
+
     // Custom setter that synchronously updates memory
     const updateOrderLines = useCallback((action) => {
         setOrderLines(prev => {
@@ -69,6 +99,10 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             return next;
         });
     }, [symbol]);
+
+    const activePointers = useRef(new Map());
+    const pinchStartDist = useRef(null);
+    const pinchStartBars = useRef(null);
 
     // Load existing orders for this symbol
     useEffect(() => {
@@ -100,6 +134,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const dData = useMemo(() => isReplayMode && replayIndex >= 0 ? replayDataRef.current.slice(0, replayIndex + 1) : liveDataRef.current, [data, isReplayMode, replayIndex]);
 
     const getMath = useCallback((w, h, d) => {
+        const isMobile = w < 500;
         const pt = 26, pr = 48, pb = 20, cw = w - pr, ch = h - pb - pt, bs = cw / visibleBars;
         const tot = d.length;
         const margin = Math.floor(visibleBars * 0.35); // 35% blank space from right
@@ -118,13 +153,16 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         if (yRange) { low = yRange.low; high = yRange.high; }
         else { const pad = (high - low) * 0.1; low -= pad; high += pad; }
 
-        const p2y = (p) => isLog
-            ? pt + ch - ((Math.log(p) - Math.log(low)) / (Math.log(high) - Math.log(low))) * ch
-            : pt + ch - ((p - low) / (high - low)) * ch;
+        const p2y = (p) => {
+            const y = isLog
+                ? pt + ch - ((Math.log(p) - Math.log(low)) / (Math.log(high) - Math.log(low))) * ch
+                : pt + ch - ((p - low) / (high - low)) * ch;
+            return Math.floor(y); // Snap to pixel
+        };
         const y2p = (y) => isLog
             ? Math.exp(Math.log(low) + ((pt + ch - y) / ch) * (Math.log(high) - Math.log(low)))
             : low + ((pt + ch - y) / ch) * (high - low);
-        return { bs, p2y, y2p, i2x: (i) => (i - start) * bs + (bs / 2), start, end, ch, cw, pt, pb, pr, low, high, slice };
+        return { bs, p2y, y2p, i2x: (i) => Math.floor((i - start) * bs + (bs / 2)), start, end, ch, cw, pt, pb, pr, low, high, slice };
     }, [visibleBars, isLog, yRange]);
 
 
@@ -134,13 +172,25 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             math = getMath(canvas.width / dpr, canvas.height / dpr, dData);
         if (!math) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save(); ctx.scale(dpr, dpr);
+        ctx.imageSmoothingEnabled = false; // Disable blurring for razor-sharp edges
 
-        // GRID (Disabled for cleaner look as per user request)
-        /*
-        ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
-        for (let i = 1; i < 9; i++) { const y = math.pt + (math.ch / 8) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke(); }
-        for (let i = 1; i < 10; i++) { const x = (math.cw / 10) * i; ctx.beginPath(); ctx.moveTo(x, math.pt); ctx.lineTo(x, math.pt + math.ch); ctx.stroke(); }
-        */
+        const visibleBars = math.slice.length;
+        const bw = Math.max(2, math.bs * 0.85);
+
+        // 1. Draw Cinematic Grid (at the bottom)
+        ctx.strokeStyle = COLORS.grid;
+        ctx.lineWidth = 0.5;
+        const barsPerGrid = Math.max(1, Math.floor(visibleBars / 10));
+        math.slice.forEach((c, i) => {
+            if ((math.start + i) % barsPerGrid === 0) {
+                const x = math.i2x(math.start + i);
+                ctx.beginPath(); ctx.moveTo(x, math.pt); ctx.lineTo(x, math.pt + math.ch); ctx.stroke();
+            }
+        });
+        for (let i = 0; i < 9; i++) {
+            const y = math.pt + (math.ch / 8) * i;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke();
+        }
 
         // BACKGROUND WATERMARK (Brand Themed - Signature style)
         ctx.save();
@@ -183,15 +233,18 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
                 const tr = c[trendKey] || c[trendKey.toUpperCase()];
                 const maValue = c[maKey] || c[maKey.toUpperCase()];
                 if (tr !== lastTrend) { flush(lastTrend, segment); segment = []; lastTrend = tr; }
-                if (tr === 1 || tr === -1) segment.push({ x: math.i2x(math.start + i), mY: math.p2y(maValue), cY: math.p2y(c.close) });
+                if (tr === 1 || tr === -1) {
+                    const ohlc4 = (c.open + c.high + c.low + c.close) / 4;
+                    segment.push({ x: math.i2x(math.start + i), mY: math.p2y(maValue), cY: math.p2y(ohlc4) });
+                }
             });
             flush(lastTrend, segment);
         };
 
-        if (vis.CLOUD) drawCloud('stTrend', 'stMa', COLORS.stBull, COLORS.stBear);
-        if (vis.CLOUD2) drawCloud('stTrend2', 'stMa2', COLORS.stBull, COLORS.stBear);
+        if (vis.CLOUD) drawCloud('stTrend', 'stMa', 'rgba(0, 110, 255, 0.45)', 'rgba(255, 35, 35, 0.45)');
+        if (vis.CLOUD2) drawCloud('stTrend2', 'stMa2', 'rgba(0, 110, 255, 0.45)', 'rgba(255, 35, 35, 0.45)');
 
-        // EMAS
+        // EMA
         const emas = ['ema15', 'ema15_5', 'ema15_15', 'ema15_15_15', 'ema15_15_15_15', 'ema15_15_15_15_30'];
         emas.forEach((k, idx) => {
             if (!vis[k.toUpperCase()]) return;
@@ -200,29 +253,57 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             ctx.stroke();
         });
 
-        // CANDLES with DELTA GLOW and FOOTPRINT MARKERS
+        // RENKO BRICKS (Macro Trend Overlay)
+        if (renkoBricksRef.current && renkoBricksRef.current.length > 0) {
+            const bricks = renkoBricksRef.current;
+            ctx.save();
+            ctx.setLineDash([2, 4]);
+            ctx.lineWidth = 0.7;
+
+            const findX = (ts) => {
+                // Find approximate index in dData
+                let low = 0, high = dData.length - 1;
+                while (low <= high) {
+                    let mid = Math.floor((low + high) / 2);
+                    if (dData[mid].timestamp < ts) low = mid + 1;
+                    else if (dData[mid].timestamp > ts) high = mid - 1;
+                    else { low = mid; break; }
+                }
+                return math.i2x(low);
+            };
+
+            bricks.forEach(rb => {
+                const x1 = findX(rb.t);
+                const x2 = findX(rb.et || Date.now()); // et might be current time for active brick
+                const y1 = math.p2y(rb.o);
+                const y2 = math.p2y(rb.c);
+
+                if (x2 < 0 || x1 > math.cw) return;
+
+                const isUp = rb.c > rb.o;
+                ctx.strokeStyle = isUp ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)';
+                ctx.strokeRect(x1, Math.min(y1, y2), Math.max(2, x2 - x1), Math.abs(y2 - y1));
+            });
+            ctx.restore();
+        }
+
+        // CANDLES
         math.slice.forEach((c, i) => {
             const x = math.i2x(math.start + i), isUp = c.close >= c.open;
-            const deltaVal = c.delta || 0;
-            let col = isUp ? COLORS.bull : COLORS.bear;
-            if (deltaVal > 5000 && isUp) col = '#34d399';
-            else if (deltaVal < -5000 && !isUp) col = '#f87171';
+            const col = isUp ? COLORS.bull : COLORS.bear;
 
             // Draw wick
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, math.p2y(c.high)); ctx.lineTo(x, math.p2y(c.low)); ctx.stroke();
 
-            // Draw body with potential Glow Effect for High Delta
+            // Draw body
             ctx.fillStyle = col;
-            if (Math.abs(deltaVal) > 10000) {
-                ctx.shadowBlur = 8; ctx.shadowColor = col;
-            } else {
-                ctx.shadowBlur = 0;
-            }
-
             const bw = Math.max(2, math.bs * 0.8);
             ctx.fillRect(x - bw / 2, Math.min(math.p2y(c.open), math.p2y(c.close)), bw, Math.max(1, Math.abs(math.p2y(c.open) - math.p2y(c.close))));
-            ctx.shadowBlur = 0;
+
         });
+
+        // SIGNAL MARKERS REMOVED (Bayesian System)
+
 
         // LIVE PRICE LINE
         const lastCandle = dData[dData.length - 1];
@@ -243,12 +324,14 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             }
         }
 
-        // Y-AXIS (Compact Sidebar)
-        ctx.fillStyle = '#0a0f1d'; ctx.fillRect(math.cw, math.pt, math.pr, math.ch);
-        ctx.fillStyle = '#cbd5e1'; ctx.font = '9px Inter'; ctx.textAlign = 'center';
+        // Y-AXIS (Obsidian Sidebar)
+        const isMobile = math.pr < 50;
+        ctx.fillStyle = COLORS.bg; ctx.fillRect(math.cw, math.pt, math.pr + 1, math.ch);
+        ctx.fillStyle = '#64748b'; ctx.font = isMobile ? '8.5px Inter' : '9px Inter'; ctx.textAlign = 'center';
         for (let i = 0; i < 9; i++) {
             const y = math.pt + (math.ch / 8) * i;
-            ctx.fillText(math.y2p(y).toFixed(symbol.includes('SENSEX') || symbol.includes('NIFTY') ? 0 : 2), math.cw + (math.pr / 2), y + 3.5);
+            const priceText = math.y2p(y).toFixed(isMobile ? 0 : 1);
+            ctx.fillText(priceText, math.cw + (math.pr / 2), y + 3.5);
         }
 
         // HIGHLIGHT LAST PRICE ON Y-AXIS
@@ -258,10 +341,11 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             if (y >= math.pt && y <= math.pt + math.ch) {
                 const isUp = lastCandle.close >= lastCandle.open;
                 ctx.fillStyle = isUp ? COLORS.bull : COLORS.bear;
-                ctx.fillRect(math.cw, y - 9, math.pr, 18);
+                ctx.fillRect(math.cw, y - 9, math.pr + 1, 18);
                 ctx.fillStyle = '#fff';
-                ctx.font = 'bold 10px Inter';
-                ctx.fillText(lastPrice.toFixed(2), math.cw + (math.pr / 2), y + 3.5);
+                ctx.font = `bold ${isMobile ? '9' : '10'}px Inter`;
+                ctx.textAlign = 'center';
+                ctx.fillText(lastPrice.toFixed(symbol.includes('SENSEX') || symbol.includes('NIFTY') ? 0 : 2), math.cw + (math.pr / 2), y + 3.5);
             }
         }
 
@@ -270,19 +354,25 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             ctx.fillText('LOG', math.cw + (math.pr / 2), math.pt + 8);
         }
 
-        // X-AXIS
-        ctx.fillStyle = '#0a0f1d'; ctx.fillRect(0, math.pt + math.ch, math.cw + math.pr, 20);
+        // X-AXIS (Obsidian Base)
+        ctx.fillStyle = COLORS.bg; ctx.fillRect(0, math.pt + math.ch, math.cw + math.pr, 20);
 
-        // DELTA HISTOGRAM (At the footer of chart)
-        math.slice.forEach((c, i) => {
-            const x = math.i2x(math.start + i), d = c.delta || 0;
-            if (d === 0) return;
-            const hScale = Math.min(15, Math.abs(d) / 5000);
-            ctx.fillStyle = d > 0 ? '#34d399' : '#f87171'; // Green/Red
-            const bw = Math.max(1, math.bs * 0.5);
-            const y = math.pt + math.ch - (d > 0 ? hScale : 0);
-            ctx.fillRect(x - bw / 2, y, bw, hScale);
-        });
+        // Cinematic Vignette (Dynamic Volatility Focus)
+        const currentAtr = lastCandle ? (lastCandle.atr ?? lastCandle.ATR ?? 0) : 0;
+        const isLowVol = config && config.atrThreshold > 0 && currentAtr < config.atrThreshold;
+
+        const grad = ctx.createRadialGradient(math.cw / 2, math.pt + math.ch / 2, 0, math.cw / 2, math.pt + math.ch / 2, Math.max(math.cw, math.ch));
+        grad.addColorStop(0, 'rgba(0,0,0,0)');
+
+        // If Low Vol (High Theta Decay), use a greyish "Dead Zone" vignette
+        if (isLowVol) {
+            grad.addColorStop(1, 'rgba(15, 23, 42, 0.85)'); // Thicker, darker slate
+        } else {
+            grad.addColorStop(1, 'rgba(2, 6, 23, 0.45)'); // Original sleek obsidian
+        }
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, math.pt, math.cw, math.ch);
 
         ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'center';
         const barsPerLabel = Math.max(1, Math.floor(visibleBars / 6));
@@ -346,39 +436,51 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
 
                 ctx.fillStyle = '#fff';
                 ctx.fillText(label, tx, math.pt + math.ch + 13);
+
+
             }
         }
         orderLines.forEach(l => {
-            const y = math.p2y(l.price); if (y < math.pt || y > math.pt + math.ch) return;
-            const isDragging = draggingOrderRef.current?.id === l.id;
+            const y = math.p2y(l.price);
             const isBuy = l.type === 'BUY';
             const color = isBuy ? '#22c55e' : '#ef4444';
+            const isDragging = draggingOrderRef.current?.id === l.id;
 
-            ctx.save();
-            ctx.strokeStyle = color; ctx.lineWidth = isDragging ? 2 : 1; ctx.setLineDash(l.isPending ? [5, 2] : [5, 5]);
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke(); ctx.setLineDash([]);
+            if (y >= math.pt && y <= math.pt + math.ch) {
+                ctx.save();
+                ctx.strokeStyle = color; ctx.lineWidth = isDragging ? 2 : 1; ctx.setLineDash(l.isPending ? [5, 2] : [5, 5]);
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(math.cw, y); ctx.stroke(); ctx.setLineDash([]);
+                ctx.restore();
+            }
 
-            ctx.font = 'bold 10px Inter'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-            const b1 = `${l.type} ${l.qty || 1}${l.isPending ? ' (DROP)' : ''}`, b2 = `${l.price.toFixed(2)}`, b3 = '✕';
-            const w1 = ctx.measureText(b1).width + 12, w2 = ctx.measureText(b2).width + 12, w3 = 18;
-            let curX = 5;
-
-            ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(curX, y - 9, w1, 18, 4); ctx.fill();
-            ctx.fillStyle = '#fff'; ctx.fillText(b1, curX + 6, y); curX += w1 + 4;
-
-            ctx.fillStyle = '#0f172a'; ctx.beginPath(); ctx.roundRect(curX, y - 9, w2, 18, 4); ctx.fill();
-            ctx.strokeStyle = color + '80'; ctx.stroke();
-            ctx.fillStyle = '#fff'; ctx.fillText(b2, curX + 6, y); curX += w2 + 4;
-
-            ctx.fillStyle = '#0f172a'; ctx.beginPath(); ctx.roundRect(curX, y - 9, w3, 18, 4); ctx.fill();
-            ctx.strokeStyle = color + '80'; ctx.stroke();
-            ctx.fillStyle = color; ctx.fillText(b3, curX + 5, y);
-            ctx.restore();
+            const domNode = document.getElementById(`order-dom-${l.id}`);
+            if (domNode) {
+                if (y < math.pt || y > math.pt + math.ch) {
+                    domNode.style.display = 'none';
+                } else {
+                    domNode.style.display = 'flex';
+                    domNode.style.top = (y - 12) + 'px';
+                    const priceInput = domNode.querySelector('.order-price-input');
+                    if (priceInput && document.activeElement !== priceInput) {
+                        priceInput.value = l.price.toFixed(2);
+                    }
+                }
+            }
         });
         ctx.restore();
     }, [getMath, dData, orderLines, symbol]);
 
+    const lastResetSignal = useRef(0);
+
+    const onReset = useCallback(() => {
+        setYRange(null);
+        scrollOffset.current = 0;
+        isFollowing.current = true;
+        setVisibleBars(160);
+    }, []);
+
     const showToast = (type, msg) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3000); };
+
 
     // Seed chart from WebSocket snapshot delivery (zero REST calls in scanner mode)
     const snapshotCallback = useCallback((data) => {
@@ -389,7 +491,11 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             setLoading(false);
             return;
         }
-        const normalized = data.candles.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+        const normalized = data.candles.map(c => {
+            const base = { ...c, timestamp: new Date(c.timestamp).getTime() };
+            if (c.indicators) Object.assign(base, c.indicators);
+            return base;
+        });
         liveDataRef.current = normalized;
         replayDataRef.current = normalized;
         setData(normalized); // trigger one re-render to update dData memo
@@ -400,7 +506,11 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     // Fall back to individual REST fetch only for maximized (full history) view
     useEffect(() => {
         if (preloadedData && preloadedData.length > 0) {
-            const normalized = preloadedData.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+            const normalized = preloadedData.map(c => {
+                const base = { ...c, timestamp: new Date(c.timestamp).getTime() };
+                if (c.indicators) Object.assign(base, c.indicators);
+                return base;
+            });
             liveDataRef.current = normalized;
             replayDataRef.current = normalized;
             setData(normalized);
@@ -415,7 +525,11 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             setLoading(true);
             axios.get(`${API_BASE}/api/history/${symbol}/${interval}?limit=4000&_t=${Date.now()}`, { signal: controller.signal })
                 .then(res => {
-                    const normalized = res.data.map(c => ({ ...c, timestamp: new Date(c.timestamp).getTime() }));
+                    const normalized = res.data.map(c => {
+                        const base = { ...c, timestamp: new Date(c.timestamp).getTime() };
+                        if (c.indicators) Object.assign(base, c.indicators);
+                        return base;
+                    });
                     liveDataRef.current = normalized;
                     replayDataRef.current = normalized;
                     setData(normalized);
@@ -428,21 +542,38 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         // Normal Scanner mode: data will arrive via WebSocket snapshot (handled by useLiveFeed callback)
         setLoading(true);
     }, [symbol, interval, preloadedData, isMaximized]);
+    useEffect(() => {
+        if (globalResetTrigger > 0 && globalResetTrigger !== lastResetSignal.current) {
+            lastResetSignal.current = globalResetTrigger;
+            onReset();
+        }
+    }, [globalResetTrigger, onReset]);
+
     useLiveFeed(symbol, interval, useCallback(u => {
         if (isReplayMode) return;
+
+        // Debug: confirm signal/score data in console
+        if (Math.random() < 0.02) console.log("Bayesian Sync:", u.indicators);
+
         // Mutate the ref directly — NO setState, NO array copy, NO React re-render
         const arr = liveDataRef.current;
         const f = {
-            ...u.ohlc, ...u.indicators,
+            ...u.ohlc,
+            ...(u.indicators || {}),
             timestamp: u.ohlc.t,
             open: u.ohlc.o, high: u.ohlc.h, low: u.ohlc.l, close: u.ohlc.c,
-            delta: u.ohlc.d
+            atr: u.ohlc.a
         };
         if (arr.length && arr[arr.length - 1].timestamp === f.timestamp) {
             arr[arr.length - 1] = f;
         } else {
             arr.push(f);
         }
+
+        if (u.renko && u.renko.length > 0) {
+            renkoBricksRef.current = u.renko;
+        }
+
         // Schedule a canvas repaint if one isn't already pending — 60fps max
         if (!pendingRafRef.current) {
             pendingRafRef.current = requestAnimationFrame(() => {
@@ -468,22 +599,37 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     }, [render, renderOverlay]);
 
     const handleMouseDown = (e) => {
+        activePointers.current.set(e.pointerId, e);
+        if (activePointers.current.size === 2) {
+            const pts = Array.from(activePointers.current.values());
+            pinchStartDist.current = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+            pinchStartBars.current = visibleBars;
+            dragStart.current = null; // Cancel any single-finger drag
+            return;
+        }
+
+        if (!e.isPrimary) return;
         isFollowing.current = false;
         const rect = mainCanvasRef.current.getBoundingClientRect();
         const math = getMath(rect.width, rect.height, dData);
         if (!math) return; // Guard during lazy-load
         const x = e.clientX - rect.left, y = e.clientY - rect.top;
 
+        // Ignore clicks on header (26px height) to allow scrolling and avoid accidental drags
+        if (y < 26) return;
+
         const hit = orderLines.find(l => Math.abs(math.p2y(l.price) - y) < 10);
         if (hit) {
-            const ctx = overlayCanvasRef.current.getContext('2d');
-            const font = 'bold 10px Inter'; ctx.font = font;
-            const w1 = ctx.measureText(`${hit.type} ${hit.qty}${hit.isPending ? ' (DROP)' : ''}`).width + 12;
-            const w2 = ctx.measureText(`${hit.price.toFixed(2)}`).width + 12;
-            const xX = 5 + w1 + 4 + w2 + 4;
-            if (x >= xX && x <= xX + 18) { handleCancel(hit.id); return; }
-            draggingOrderRef.current = { id: hit.id };
+            draggingOrderRef.current = { id: hit.id, originalPrice: hit.price };
             return;
+        }
+
+        const isYAxis = (e.clientX - rect.left) > (rect.width - math.pr);
+        const isXAxis = (e.clientY - rect.top) > (rect.height - math.pb);
+
+        // Capture pointer if on axis to ensure we get events even if user moves out
+        if (isYAxis || isXAxis) {
+            e.target.setPointerCapture(e.pointerId);
         }
 
         dragStart.current = {
@@ -492,21 +638,42 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             scroll: scrollOffset.current,
             yRangeStart: { low: math.low, high: math.high },
             visibleBarsStart: visibleBars,
-            isYAxis: (e.clientX - rect.left) > (rect.width - math.pr),
-            isXAxis: (e.clientY - rect.top) > (rect.height - math.pb)
+            isYAxis,
+            isXAxis
         };
     };
 
-    const handleMouseUp = () => {
-        if (draggingOrderRef.current) {
-            const line = orderLines.find(l => l.id === draggingOrderRef.current.id);
+    const handleMouseUp = (e) => {
+        activePointers.current.delete(e.pointerId);
+        if (activePointers.current.size < 2) {
+            pinchStartDist.current = null;
+            pinchStartBars.current = null;
+        }
+
+        // Grab and IMMEDIATELY clear the drag ref so the line stops following the cursor
+        const dragInfo = draggingOrderRef.current;
+        draggingOrderRef.current = null;
+        dragStart.current = null;
+
+        if (dragInfo) {
+            const line = orderLines.find(l => l.id === dragInfo.id);
             if (line) {
-                if (line.isPending) handlePlace(line);
-                else handleModify(line.id, line.price, line.qty);
+                if (line.isPending) {
+                    handlePlace(line);
+                } else {
+                    // Send price modification to broker
+                    handleModify(line.id, line.price, line.qty);
+                    // Focus the qty input on the order label so the user can adjust qty if needed
+                    setTimeout(() => {
+                        const domNode = document.getElementById(`order-dom-${line.id}`);
+                        if (domNode) {
+                            const input = domNode.querySelector('input[type="number"]');
+                            if (input) input.focus();
+                        }
+                    }, 50);
+                }
             }
         }
-        dragStart.current = null;
-        draggingOrderRef.current = null;
     };
 
     const handlePlace = async (line) => {
@@ -540,6 +707,17 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     };
 
     const handleMouseMove = (e) => {
+        activePointers.current.set(e.pointerId, e);
+
+        if (activePointers.current.size === 2 && pinchStartDist.current) {
+            const pts = Array.from(activePointers.current.values());
+            const dist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+            const ratio = pinchStartDist.current / dist;
+            const newBars = Math.max(20, Math.min(800, Math.floor(pinchStartBars.current * ratio)));
+            if (newBars !== visibleBars) setVisibleBars(newBars);
+            return;
+        }
+
         const rect = mainCanvasRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left, y = e.clientY - rect.top;
         mouseRef.current = { x, y };
@@ -555,7 +733,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             updateOrderLines(nx => nx.map(l => l.id === dragId ? { ...l, price: math.y2p(y) } : l));
         }
 
-        if (dragStart.current) {
+        if (dragStart.current && activePointers.current.size === 1) {
             const dx = e.clientX - dragStart.current.x, dy = e.clientY - dragStart.current.y;
             if (dragStart.current.isYAxis) {
                 const base = dragStart.current.yRangeStart;
@@ -612,52 +790,198 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         try {
             const mq = await axios.get(`${API_BASE}/api/account/max-qty?symbol=${symbol}&price=${price}&leverage=5`);
             const qty = mq.data.maxQty || 1;
+
             updateOrderLines(nx => [...nx, { id: tempId, price, type, qty, isPending: true }]);
+
+            const ctx = overlayCanvasRef.current.getContext('2d');
+            ctx.font = 'bold 10px Inter';
+            const w1 = ctx.measureText(`${type} ${qty} (DROP)`).width + 12;
+            setEditingQty({ id: tempId, x: 5, y: midY, qty: qty, width: w1, isModifying: false });
+
         } catch (err) {
             showToast('error', `Funds fetch failed: ${err.message}`);
         }
     };
 
+
     return (
-        <div ref={containerRef} className={`trading-canvas-wrapper ${isHighlighted ? 'glow-highlight' : ''}`} style={{ width: '100%', height: '100%', position: 'relative', background: COLORS.bg, overflow: 'hidden', borderRadius: 'inherit' }}
+        <div ref={containerRef} className={`trading-canvas-wrapper ${isHighlighted ? 'glow-highlight' : ''}`} style={{ width: '100%', height: '100%', position: 'relative', background: COLORS.bg, overflow: 'hidden', borderRadius: 'inherit', touchAction: 'pan-y' }}
             onWheel={e => { e.preventDefault(); setVisibleBars(p => Math.max(20, Math.min(800, p + (e.deltaY > 0 ? 8 : -8)))); }}
-            onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); }}>
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '26px', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(15,23,42,0.95)', padding: '0 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)' }}>
+            onPointerDown={handleMouseDown} onPointerMove={handleMouseMove} onPointerUp={handleMouseUp}
+            onPointerCancel={(e) => { activePointers.current.clear(); pinchStartDist.current = null; dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); }}
+            onPointerLeave={(e) => { activePointers.current.delete(e.pointerId); if (activePointers.current.size === 0) { dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); } }}>
+
+            {/* Y-Axis Touch Capture Zone (Allows scaling without triggering page scroll) */}
+            <div style={{ position: 'absolute', top: '26px', right: 0, bottom: '20px', width: '48px', touchAction: 'none', zIndex: 100 }} />
+
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '26px', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(15,23,42,0.95)', padding: '0 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', touchAction: 'pan-y' }} onPointerDown={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ color: '#fbbf24', fontSize: '11px', fontWeight: 'bold' }}>{formatSymbol(symbol)}</span>
+
+
+
                     <span style={{ color: '#cbd5e1', fontSize: '10px', minWidth: '35px' }}>{timeRemaining}</span>
                     <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
                         {(isMaximized ? ['1min', '3min', '5min', '15min'] : []).map(tf => (
-                            <button key={tf} onClick={(e) => { e.stopPropagation(); setTimeframe(tf); if (onIntervalChange) onIntervalChange(tf); }} style={{ background: interval === tf ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>{tf}</button>
+                            <button key={tf} onClick={(e) => { e.stopPropagation(); setTimeframe(tf); if (onIntervalChange) onIntervalChange(tf); }} style={{ background: interval === tf ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+                                {tf.replace('min', 'M')}
+                            </button>
                         ))}
                     </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {loading && <div className="loader-mini" style={{ width: '12px', height: '12px', border: '2px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />}
                     <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                    <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', padding: '1px' }}>
-                        <button onClick={() => setIsReplayMode(!isReplayMode)} title="Toggle Replay Mode" style={{ background: isReplayMode ? '#ef4444' : 'transparent', color: isReplayMode ? '#fff' : '#60a5fa', border: 'none', fontSize: '10px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>
-                            {isReplayMode ? '✕' : '⏪'}
-                        </button>
-                        {isReplayMode && <button onClick={() => setIsReplaying(!isReplaying)} style={{ background: '#3b82f6', color: '#fff', border: 'none', fontSize: '10px', height: '18px', padding: '0 6px', borderRadius: '2px', cursor: 'pointer', marginLeft: '4px' }}>{isReplaying ? '⏸' : '▶'}</button>}
-                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <button onClick={() => handleBuySell('BUY')} style={{ background: '#059669', color: '#fff', border: 'none', fontSize: '10px', fontWeight: 'bold', height: '18px', padding: '0 8px', borderRadius: '2px', cursor: 'pointer' }}>BL</button>
-                        <button onClick={() => handleBuySell('SELL')} style={{ background: '#dc2626', color: '#fff', border: 'none', fontSize: '10px', fontWeight: 'bold', height: '18px', padding: '0 8px', borderRadius: '2px', cursor: 'pointer' }}>SL</button>
-                        <button onClick={() => { setYRange(null); scrollOffset.current = 0; isFollowing.current = true; render(); }} title="Reset Chart" style={{ background: '#1e293b', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>↺</button>
+                        <button
+                            onClick={handleDeleteSymbol}
+                            className="chart-tool-btn btn-delete"
+                            title="Delete / Purge Symbol"
+                            style={{ marginRight: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                        >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
+                        <button
+                            onClick={() => setIsReplayMode(!isReplayMode)}
+                            className={`chart-tool-btn btn-replay ${isReplayMode ? 'active' : ''}`}
+                            data-tooltip="Toggle Replay Mode"
+                        >
+                            {isReplayMode ? (
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            ) : (
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 19 2 12 11 5 11 19"></polygon><polygon points="22 19 13 12 22 5 22 19"></polygon></svg>
+                            )}
+                        </button>
+                        {isReplayMode && (
+                            <button
+                                onClick={() => setIsReplaying(!isReplaying)}
+                                className="chart-tool-btn btn-replay"
+                                style={{ background: isReplaying ? 'rgba(59, 130, 246, 0.4)' : '' }}
+                                data-tooltip={isReplaying ? "Pause" : "Play"}
+                            >
+                                {isReplaying ? (
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                                ) : (
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5,3 19,12 5,21"></polygon></svg>
+                                )}
+                            </button>
+                        )}
+                        <button onClick={() => handleBuySell('BUY')} className="chart-tool-btn btn-buy" data-tooltip="Place Buy Order">BL</button>
+                        <button onClick={() => handleBuySell('SELL')} className="chart-tool-btn btn-sell" data-tooltip="Place Sell Order">SL</button>
                         {!hideMaximize && (
-                            <button onClick={() => onMaximize(interval)} title={isMaximized ? "Exit Maximize" : "Maximize"} style={{ background: isMaximized ? '#3b82f6' : '#1e293b', color: '#fff', border: 'none', fontSize: '12px', height: '18px', width: '24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '2px', cursor: 'pointer' }}>{isMaximized ? '↙' : '⛶'}</button>
+                            <button
+                                onClick={() => onMaximize(interval)}
+                                className={`chart-tool-btn btn-max ${isMaximized ? 'active' : ''}`}
+                                data-tooltip={isMaximized ? "Exit Full View" : "Maximize View"}
+                            >
+                                {isMaximized ? (
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14l10-10"></path><path d="M20 4h-6v6"></path><path d="M4 20h6v-6"></path></svg>
+                                ) : (
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
+                                )}
+                            </button>
                         )}
                     </div>
                 </div>
             </div>
-            <canvas ref={mainCanvasRef} style={{ position: 'absolute', top: 0, left: 0 }} />
-            <canvas ref={overlayCanvasRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />
+            <canvas ref={mainCanvasRef} style={{ position: 'absolute', top: 0, left: 0, borderRadius: 'inherit' }} />
+            <canvas ref={overlayCanvasRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', borderRadius: 'inherit' }} />
             {toast && (
                 <div style={{ position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)', background: toast.type === 'success' ? 'rgba(5,150,105,0.9)' : 'rgba(220,38,38,0.9)', color: '#fff', padding: '6px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 'bold', zIndex: 100, backdropFilter: 'blur(5px)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
                     {toast.msg}
                 </div>
             )}
+
+            {/* BAYESIAN INTEL OVERLAY REMOVED */}
+
+            {/* Custom Delete Confirmation Modal */}
+            {showDeleteConfirm && (
+                <div style={{ position: 'absolute', inset: 0, zIndex: 1000, background: 'rgba(2, 6, 23, 0.6)', backdropFilter: 'blur(4px)', display: 'flex', justifyContent: 'center', alignItems: 'center', fontFamily: '"Inter", sans-serif' }}
+                    onClick={() => setShowDeleteConfirm(false)}>
+                    <div style={{ background: '#0f172a', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '12px', padding: '20px', width: '280px', boxShadow: '0 20px 40px rgba(0,0,0,0.8), 0 0 20px rgba(239, 68, 68, 0.15)', textAlign: 'center', animation: 'popIn 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28)' }}
+                        onClick={e => e.stopPropagation()}>
+                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(239,68,68,0.1)', display: 'flex', justifyContent: 'center', alignItems: 'center', margin: '0 auto 12px' }}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </div>
+                        <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', color: '#f8fafc', fontWeight: 600 }}>Delete {symbol}?</h3>
+                        <p style={{ margin: '0 0 20px 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.4' }}>This will permanently remove the symbol from your tracked list and clear all cached history.</p>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => setShowDeleteConfirm(false)}
+                                style={{ flex: 1, padding: '8px 0', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#cbd5e1', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Cancel</button>
+                            <button onClick={confirmDeleteSymbol}
+                                style={{ flex: 1, padding: '8px 0', background: '#ef4444', border: 'none', color: '#fff', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', boxShadow: '0 4px 12px rgba(239,68,68,0.3)', transition: 'all 0.2s' }}>Yes, Delete</button>
+                        </div>
+                    </div>
+                    <style>{`@keyframes popIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }`}</style>
+                </div>
+            )}
+
+            {orderLines.map(l => {
+                const isBuy = l.type === 'BUY';
+                const color = isBuy ? '#22c55e' : '#ef4444';
+                return (
+                    <div key={l.id} id={`order-dom-${l.id}`} style={{
+                        position: 'absolute',
+                        display: 'none',
+                        alignItems: 'center',
+                        gap: '4px',
+                        zIndex: 100,
+                        left: '5px',
+                        top: 0
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: color, padding: '2px 4px', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 'bold', color: '#fff' }}>{l.type}{l.isPending ? ' (DROP)' : ''}</span>
+                            <input
+                                type="number"
+                                defaultValue={l.qty}
+                                onFocus={e => e.target.select()}
+                                onBlur={(e) => {
+                                    const newQty = parseInt(e.target.value, 10);
+                                    if (!isNaN(newQty) && newQty > 0) {
+                                        if (!l.isPending && l.qty !== newQty) handleModify(l.id, l.price, newQty);
+                                        updateOrderLines(nx => nx.map(ol => ol.id === l.id ? { ...ol, qty: newQty } : ol));
+                                    } else {
+                                        e.target.value = l.qty;
+                                    }
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); }}
+                                onPointerDown={e => e.stopPropagation()}
+                                style={{ width: '45px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', fontSize: '11px', outline: 'none', fontWeight: 'bold', textAlign: 'center', borderRadius: '2px' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', background: '#0f172a', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${color}80`, boxShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                            <input
+                                className="order-price-input"
+                                type="number"
+                                step="0.05"
+                                defaultValue={l.price.toFixed(2)}
+                                onFocus={e => e.target.select()}
+                                onBlur={(e) => {
+                                    const newPrice = parseFloat(e.target.value);
+                                    if (!isNaN(newPrice) && newPrice > 0) {
+                                        if (!l.isPending && l.price !== newPrice) handleModify(l.id, newPrice, l.qty);
+                                        updateOrderLines(nx => nx.map(ol => ol.id === l.id ? { ...ol, price: newPrice } : ol));
+                                    } else {
+                                        e.target.value = l.price.toFixed(2);
+                                    }
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); }}
+                                onPointerDown={e => e.stopPropagation()}
+                                style={{ width: '60px', background: 'transparent', border: 'none', color: '#fff', fontSize: '11px', outline: 'none', fontWeight: 'bold', textAlign: 'center' }}
+                            />
+                        </div>
+
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancel(l.id);
+                            }}
+                            onPointerDown={e => e.stopPropagation()}
+                            style={{ background: '#0f172a', border: `1px solid ${color}80`, color: color, borderRadius: '4px', width: '22px', height: '22px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>✕</button>
+                    </div>
+                );
+            })}
         </div>
     );
 });

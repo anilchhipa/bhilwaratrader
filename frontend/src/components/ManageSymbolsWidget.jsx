@@ -13,6 +13,12 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
+    const [notification, setNotification] = useState(null);
+
+    const showNotify = (msg, type = 'success') => {
+        setNotification({ msg, type });
+        setTimeout(() => setNotification(null), 3000);
+    };
 
     const [position, setPosition] = useState(() => {
         const saved = localStorage.getItem('manage_symbols_pos');
@@ -56,15 +62,22 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
                 symbol: inst.symbol,
                 exchange: inst.exchange
             });
+            showNotify(`${inst.symbol} added to watchlist!`, 'success');
             if (onUpdate) onUpdate(); // Trigger refresh in App.jsx
-        } catch (err) { }
+        } catch (err) {
+            showNotify(`Failed to add ${inst.symbol}`, 'error');
+        }
     };
 
     const untrackSymbol = async (symbol) => {
         try {
             await axios.post(`${API_BASE}/api/symbols/untrack`, { symbol });
+            localStorage.removeItem(`orders_${symbol}`);
+            showNotify(`${symbol} removed from watchlist.`, 'remove');
             if (onUpdate) onUpdate();
-        } catch (err) { }
+        } catch (err) {
+            showNotify(`Failed to remove ${symbol}`, 'error');
+        }
     };
 
     const toggleSymbol = async (inst, isTracked) => {
@@ -114,9 +127,14 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
         if (!window.confirm(`CRITICAL: Flush data and UNTRACK ${selectedForFlush.length} symbols? This will remove them from the screen completely.`)) return;
         try {
             await axios.post(`${API_BASE}/api/symbols/purge`, { symbols: selectedForFlush });
+            selectedForFlush.forEach(s => localStorage.removeItem(`orders_${s}`));
+            const count = selectedForFlush.length;
             setSelectedForFlush([]);
+            showNotify(`Successfully purged ${count} symbols.`, 'success');
             if (onUpdate) onUpdate(); // Refresh the tracked list in parent
-        } catch (err) { }
+        } catch (err) {
+            showNotify('Flush operation failed.', 'error');
+        }
     };
 
     const handleFlushAll = async () => {
@@ -209,14 +227,14 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
     return (
         <div
             className="premium-widget-panel"
-            style={{
+            style={window.innerWidth > 768 ? {
                 position: 'fixed',
                 left: `${position.x}px`,
                 top: `${position.y}px`,
                 zIndex: 1200,
                 width: '940px',
                 height: '80vh'
-            }}
+            } : { zIndex: 1200 }}
         >
             <div className={`premium-widget-header ${isDragging ? 'dragging' : ''}`} onMouseDown={startDrag} style={{ cursor: 'move' }}>
                 <div className="premium-widget-title" style={{ gap: '24px' }}>
@@ -255,7 +273,34 @@ const ManageSymbolsWidget = ({ isOpen, onClose, onUpdate, trackedData: propTrack
                 <button className="premium-widget-close-btn" onClick={onClose}>✕</button>
             </div>
 
-            <div className="premium-widget-body">
+            {notification && (
+                <div style={{
+                    position: 'absolute',
+                    top: '52px',
+                    left: '50%',
+                    transform: 'translateX(-50%) translateY(10px)',
+                    background: notification.type === 'success' ? 'rgba(5, 150, 105, 0.98)' :
+                        notification.type === 'remove' ? 'rgba(239, 68, 68, 0.98)' :
+                            'rgba(15, 23, 42, 0.98)',
+                    color: 'white',
+                    padding: '8px 24px',
+                    borderRadius: '30px',
+                    fontSize: '11px',
+                    fontWeight: '800',
+                    zIndex: 9999,
+                    backdropFilter: 'blur(12px)',
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
+                    pointerEvents: 'none',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    border: '1px solid rgba(255,255,255,0.2)'
+                }}>
+                    {notification.type === 'success' ? '🚀 ' :
+                        notification.type === 'remove' ? '🗑️ ' : '⚠️ '}
+                    {notification.msg}
+                </div>
+            )}
+
+            <div className="premium-widget-body" style={{ position: 'relative' }}>
                 {searchQuery.length >= 2 && (
                     <div className="categories-container search-results-container" style={{ marginBottom: '32px' }}>
                         {renderCategory(`Search Results for "${searchQuery}"`, searchResults, false)}

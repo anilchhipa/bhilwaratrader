@@ -39,6 +39,12 @@ message CandleData {
     double stUp2 = 19;
     double stDn2 = 20;
     int32 stTrend2 = 21;
+    int32 whaleSignal = 22;
+
+    // Signal System
+    int32 signal = 23;       // +1 BUY, -1 SELL, 0 NO TRADE
+    double tradeScore = 24;  // Bayesian composite score (0.0–8.0)
+    double er = 25;          // Efficiency Ratio (0.0–1.0)
 }
 
 message BatchCandleUpdate {

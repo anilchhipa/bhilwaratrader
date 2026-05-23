@@ -1,16 +1,18 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-deep: #08090d;
-  --bg-surface: rgba(20, 24, 33, 0.9);
-  --bg-card: rgba(30, 34, 45, 0.6);
-  --accent-neon-blue: #3b82f6;
+  --bg-deep: #020617;
+  /* Obsidian Dark */
+  --bg-surface: rgba(15, 23, 42, 0.75);
+  --bg-card: rgba(30, 41, 59, 0.4);
+  --accent-neon-blue: #00f2ff;
+  /* Cyber Cyan */
   --accent-emerald: #10b981;
-  --accent-crimson: #ef4444;
+  --accent-crimson: #f43f5e;
   --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.6);
+  --text-secondary: #64748b;
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
 
   font-family: 'Inter', system-ui, sans-serif;
   line-height: 1.5;
@@ -37,8 +39,16 @@ body,
   background-color: var(--bg-deep);
 }
 
+.app-container,
+.main-content,
+.scanner-view-container {
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden !important;
+}
+
 body {
-  background: radial-gradient(circle at top right, #1e293b, #08090d 60%);
+  background: radial-gradient(circle at 50% 0%, #0f172a, #020617 80%);
 }
 
 h1,
@@ -59,8 +69,83 @@ button {
 
 ::-webkit-scrollbar {
   width: 6px;
-  height: 6px;
+  --header-h: 52px;
+  --accent: #3b82f6;
+  --accent-glow: rgba(59, 130, 246, 0.3);
 }
+
+
+
+.chart-tool-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 26px !important;
+  height: 18px !important;
+  border-radius: 4px !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  background: rgba(15, 23, 42, 0.4) !important;
+  cursor: pointer !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 8.5px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0.2px !important;
+}
+
+.chart-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  transform: translateY(-1px);
+}
+
+.chart-tool-btn.btn-buy {
+  color: #10b981 !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+  background: rgba(16, 185, 129, 0.05) !important;
+}
+
+.chart-tool-btn.btn-buy:hover {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border-color: #10b981 !important;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.3) !important;
+}
+
+.chart-tool-btn.btn-sell {
+  color: #f43f5e !important;
+  border-color: rgba(244, 63, 94, 0.2) !important;
+  background: rgba(244, 63, 94, 0.05) !important;
+}
+
+.chart-tool-btn.btn-sell:hover {
+  background: rgba(244, 63, 94, 0.15) !important;
+  border-color: #f43f5e !important;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.3) !important;
+}
+
+.chart-tool-btn.btn-replay {
+  color: var(--accent-neon-blue) !important;
+  border-color: rgba(0, 242, 255, 0.2) !important;
+}
+
+.chart-tool-btn.btn-replay:hover {
+  background: rgba(0, 242, 255, 0.1) !important;
+  border-color: var(--accent-neon-blue) !important;
+  box-shadow: 0 0 10px rgba(0, 242, 255, 0.3) !important;
+}
+
+.chart-tool-btn.btn-max {
+  color: #64748b !important;
+  border-color: rgba(100, 116, 139, 0.2) !important;
+}
+
+.chart-tool-btn.btn-max:hover {
+  color: #f8fafc !important;
+  border-color: #f8fafc !important;
+}
+
+
 
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -73,6 +158,67 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* Tooltip base */
+[data-tooltip] {
+  position: relative;
+  cursor: pointer;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 135%;
+  /* Changed from bottom: 125% */
+  left: 50%;
+  transform: translateX(-50%) translateY(-10px);
+  padding: 5px 10px;
+  background: rgba(15, 23, 42, 0.98);
+  backdrop-filter: blur(12px);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+  z-index: 999999 !important;
+  pointer-events: none;
+}
+
+[data-tooltip]::before {
+  content: '';
+  position: absolute;
+  top: 110%;
+  /* Changed from bottom: 110% */
+  left: 50%;
+  transform: translateX(-50%) translateY(-10px);
+  border: 6px solid transparent;
+  border-bottom-color: rgba(15, 23, 42, 0.98);
+  /* Changed arrow direction */
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 999999 !important;
+  pointer-events: none;
+}
+
+.scanner-tf-selector,
+.header-right,
+.chart-header,
+.grid-chart-item {
+  overflow: visible !important;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:hover::before {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
 }
 
 .glow-highlight {

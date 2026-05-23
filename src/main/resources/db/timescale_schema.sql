@@ -29,8 +29,11 @@ CREATE TABLE IF NOT EXISTS candles (
     macd_line DOUBLE PRECISION,
     signal_line DOUBLE PRECISION,
     macd_5 DOUBLE PRECISION,
-    macd_5_5 DOUBLE PRECISION,
-    delta DOUBLE PRECISION,
+    st_trend2 INTEGER,
+    atr DOUBLE PRECISION,
+    signal INTEGER,
+    trade_score DOUBLE PRECISION,
+    er DOUBLE PRECISION,
     PRIMARY KEY (time, symbol, interval)
 );
 

@@ -5,6 +5,10 @@ import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import org.jctools.queues.MpscArrayQueue;
 
 /**
  * Repository for CRUD operations on candle data in TimescaleDB
@@ -12,9 +16,52 @@ import java.util.List;
  */
 public class TimescaleRepository {
     private final TimescaleClient timescaleClient;
+    private final MpscArrayQueue<WriteTask> writeQueue = new MpscArrayQueue<>(65536);
+    private final ScheduledExecutorService flusher = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "TimescaleFlusher-0");
+        t.setDaemon(true);
+        return t;
+    });
 
     public TimescaleRepository(TimescaleClient timescaleClient) {
         this.timescaleClient = timescaleClient;
+        initializeSchema();
+        startFlusher();
+    }
+
+    private void startFlusher() {
+        flusher.scheduleAtFixedRate(this::flushQueue, 2, 2, TimeUnit.SECONDS);
+    }
+
+    private void flushQueue() {
+        if (writeQueue.isEmpty())
+            return;
+
+        List<WriteTask> tasks = new ArrayList<>();
+        writeQueue.drain(tasks::add);
+
+        if (tasks.isEmpty())
+            return;
+
+        // Grouping by symbol/interval could optimize further, but batching is the main
+        // win
+        for (WriteTask task : tasks) {
+            executeSave(task.candles(), task.symbol(), task.interval());
+        }
+    }
+
+    /**
+     * Public entry point: Queues the save operation to be executed asynchronously.
+     */
+    public int saveCandles(List<Candle> candles, String symbol, String interval) {
+        if (candles == null || candles.isEmpty())
+            return 0;
+
+        if (!writeQueue.offer(new WriteTask(new ArrayList<>(candles), symbol, interval))) {
+            System.err.println("TimescaleRepository: Write queue full! Dropping data for " + symbol);
+            return 0;
+        }
+        return candles.size();
     }
 
     /**
@@ -57,29 +104,27 @@ public class TimescaleRepository {
                         "st_up2 DOUBLE PRECISION, " +
                         "st_dn2 DOUBLE PRECISION, " +
                         "st_trend2 INTEGER, " +
-                        "delta DOUBLE PRECISION, " +
+                        "atr DOUBLE PRECISION, " +
+                        "signal INTEGER, " +
+                        "trade_score DOUBLE PRECISION, " +
+                        "er DOUBLE PRECISION, " +
                         "PRIMARY KEY (time, symbol, interval)" +
                         ")");
 
-                // Check and Add volume column if missing (Migration)
+                // Migration: Add missing columns if they don't exist
                 try {
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS signal INTEGER");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS trade_score DOUBLE PRECISION");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS er DOUBLE PRECISION");
                     stmt.execute(
                             "ALTER TABLE candles ADD COLUMN IF NOT EXISTS volume DOUBLE PRECISION NOT NULL DEFAULT 0");
                 } catch (SQLException e) {
                 }
 
-                // Check and Add delta column if missing (Migration)
-                try {
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS delta DOUBLE PRECISION");
-                } catch (SQLException e) {
-                    // Column might already exist
-                }
-
-                // Convert to hypertable (catch error if already hypertable)
+                // Convert to hypertable
                 try {
                     stmt.execute("SELECT create_hypertable('candles', 'time', if_not_exists => TRUE)");
                 } catch (SQLException e) {
-                    // Ignore if already hypertable or if TimescaleDB extension is not fully active
                 }
 
                 // Indexes
@@ -98,19 +143,12 @@ public class TimescaleRepository {
                         "PRIMARY KEY (symbol, interval)" +
                         ")");
 
-                // Pre-populate indices only
-                String[][] defaultSymbols = {
-                        { "SENSEX", "BSE" },
-                        { "NIFTY 50", "NSE" }
-                };
-
+                // Pre-populate default symbols
+                String[][] defaultSymbols = { { "SENSEX", "BSE" }, { "NIFTY 50", "NSE" } };
                 for (String[] symInfo : defaultSymbols) {
                     stmt.execute("INSERT INTO tracked_symbols (symbol, exchange) VALUES ('" + symInfo[0]
                             + "', '" + symInfo[1] + "') ON CONFLICT DO NOTHING");
                 }
-
-                System.out.println(
-                        "TimescaleRepository: Database schema verified/initialized. Default SENSEX heavyweights added.");
             }
         } catch (SQLException e) {
             System.err.println("Error initializing database schema: " + e.getMessage());
@@ -125,17 +163,13 @@ public class TimescaleRepository {
     }
 
     /**
-     * Save a list of candles to TimescaleDB (bulk insert with duplicate handling)
+     * Internal synchronous save logic.
      */
-    public int saveCandles(List<Candle> candles, String symbol, String interval) {
-        if (candles == null || candles.isEmpty()) {
-            return 0;
-        }
-
+    private int executeSave(List<Candle> candles, String symbol, String interval) {
         String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, signal, trade_score, er) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
                 "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
@@ -144,22 +178,19 @@ public class TimescaleRepository {
                 +
                 "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, "
                 +
-                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, "
+                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr, "
                 +
-                "delta = EXCLUDED.delta";
+                "signal = EXCLUDED.signal, trade_score = EXCLUDED.trade_score, er = EXCLUDED.er";
 
         int savedCount = 0;
         Connection conn = null;
 
         try {
             conn = timescaleClient.getConnection();
-            if (conn == null) {
-                System.err.println("TimescaleDB connection is null. Cannot save candles.");
+            if (conn == null)
                 return 0;
-            }
 
             conn.setAutoCommit(false);
-
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 for (Candle candle : candles) {
                     pstmt.setTimestamp(1, Timestamp.valueOf(candle.getTimestamp()));
@@ -171,7 +202,6 @@ public class TimescaleRepository {
                     pstmt.setDouble(7, candle.getClose());
                     pstmt.setDouble(8, candle.getVolume());
 
-                    // Indicators (nullable) - Shifting indices by 1
                     setDoubleOrNull(pstmt, 9, candle.getEma15());
                     setDoubleOrNull(pstmt, 10, candle.getEma15_5());
                     setDoubleOrNull(pstmt, 11, candle.getEma15_15());
@@ -186,50 +216,37 @@ public class TimescaleRepository {
                     setDoubleOrNull(pstmt, 20, candle.getStUp2());
                     setDoubleOrNull(pstmt, 21, candle.getStDn2());
                     setIntegerOrNull(pstmt, 22, candle.getStTrend2());
-                    setDoubleOrNull(pstmt, 23, candle.getDelta());
+                    setDoubleOrNull(pstmt, 23, candle.getAtr());
+                    setIntegerOrNull(pstmt, 24, candle.getSignal());
+                    setDoubleOrNull(pstmt, 25, candle.getTradeScore());
+                    setDoubleOrNull(pstmt, 26, candle.getEr());
 
                     pstmt.addBatch();
                 }
-
-                int[] results = pstmt.executeBatch();
-                for (int result : results) {
-                    if (result > 0)
-                        savedCount++;
-                }
-
+                pstmt.executeBatch();
                 conn.commit();
             } catch (SQLException e) {
                 conn.rollback();
                 throw e;
             }
-            // NOTE: updateSyncStatus removed from the live hot path.
-            // It runs on every candle save (hundreds of times/min) and fires
-            // an expensive MIN/MAX/COUNT(*) aggregate on the full table.
-
         } catch (SQLException e) {
-            System.err.println("Error saving candles to TimescaleDB: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("TimescaleRepository: Batch save error: " + e.getMessage());
         } finally {
             if (conn != null) {
                 try {
                     conn.close();
                 } catch (SQLException e) {
-                    e.printStackTrace();
                 }
             }
         }
-
         return savedCount;
     }
 
-    /**
-     * Get the latest N candles for a symbol and interval
-     */
     public List<Candle> getLatestCandles(String symbol, String interval, int count) {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, delta " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, signal, trade_score, er " +
                 "FROM candles " +
                 "WHERE symbol = ? AND interval = ? " +
                 "ORDER BY time DESC " +
@@ -256,66 +273,56 @@ public class TimescaleRepository {
                             rs.getDouble("volume"),
                             rs.getTimestamp("time").toLocalDateTime());
 
-                    // Load indicators
                     candle.setEma15(getDoubleOrNull(rs, "ema15"));
                     candle.setEma15_5(getDoubleOrNull(rs, "ema15_5"));
                     candle.setEma15_15(getDoubleOrNull(rs, "ema15_15"));
                     candle.setEma15_15_15(getDoubleOrNull(rs, "ema15_15_15"));
                     candle.setEma15_15_15_15(getDoubleOrNull(rs, "ema15_15_15_15"));
                     candle.setEma15_15_15_15_30(getDoubleOrNull(rs, "ema15_15_15_15_30"));
-
                     candle.setStMa(getDoubleOrNull(rs, "st_ma"));
                     candle.setStUp(getDoubleOrNull(rs, "st_up"));
                     candle.setStDn(getDoubleOrNull(rs, "st_dn"));
                     candle.setStTrend(getIntegerOrNull(rs, "st_trend"));
-
                     candle.setStMa2(getDoubleOrNull(rs, "st_ma2"));
                     candle.setStUp2(getDoubleOrNull(rs, "st_up2"));
                     candle.setStDn2(getDoubleOrNull(rs, "st_dn2"));
                     candle.setStTrend2(getIntegerOrNull(rs, "st_trend2"));
-                    candle.setDelta(getDoubleOrNull(rs, "delta"));
+                    candle.setAtr(getDoubleOrNull(rs, "atr"));
+                    candle.setSignal(getIntegerOrNull(rs, "signal"));
+                    candle.setTradeScore(getDoubleOrNull(rs, "trade_score"));
+                    candle.setEr(getDoubleOrNull(rs, "er"));
 
                     candles.add(candle);
                 }
             }
         } catch (SQLException e) {
-            System.err.println("Error fetching candles from TimescaleDB: " + e.getMessage());
-            e.printStackTrace();
+            System.err.println("Error fetching candles: " + e.getMessage());
         } finally {
             if (conn != null) {
                 try {
                     conn.close();
                 } catch (SQLException e) {
-                    e.printStackTrace();
                 }
             }
         }
 
-        // Reverse to get chronological order (oldest to newest) for charting/indicators
         List<Candle> reversed = new ArrayList<>();
         for (int i = candles.size() - 1; i >= 0; i--) {
             reversed.add(candles.get(i));
         }
-
         return reversed;
     }
 
-    /**
-     * Get the timestamp of the last candle for a symbol/interval
-     */
     public LocalDateTime getLastCandleTime(String symbol, String interval) {
         String sql = "SELECT MAX(time) as last_time FROM candles WHERE symbol = ? AND interval = ?";
         Connection conn = null;
-
         try {
             conn = timescaleClient.getConnection();
             if (conn == null)
                 return null;
-
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, symbol);
                 pstmt.setString(2, interval);
-
                 ResultSet rs = pstmt.executeQuery();
                 if (rs.next() && rs.getTimestamp("last_time") != null) {
                     return rs.getTimestamp("last_time").toLocalDateTime();
@@ -328,34 +335,25 @@ public class TimescaleRepository {
                 try {
                     conn.close();
                 } catch (SQLException e) {
-                    e.printStackTrace();
                 }
             }
         }
-
         return null;
     }
 
-    /**
-     * Get the count of candles for a symbol/interval
-     */
     public int getCandleCount(String symbol, String interval) {
         String sql = "SELECT COUNT(*) as count FROM candles WHERE symbol = ? AND interval = ?";
         Connection conn = null;
-
         try {
             conn = timescaleClient.getConnection();
             if (conn == null)
                 return 0;
-
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, symbol);
                 pstmt.setString(2, interval);
-
                 ResultSet rs = pstmt.executeQuery();
-                if (rs.next()) {
+                if (rs.next())
                     return rs.getInt("count");
-                }
             }
         } catch (SQLException e) {
             System.err.println("Error getting candle count: " + e.getMessage());
@@ -364,69 +362,24 @@ public class TimescaleRepository {
                 try {
                     conn.close();
                 } catch (SQLException e) {
-                    e.printStackTrace();
                 }
             }
         }
-
         return 0;
     }
 
-    /**
-     * Update sync status metadata
-     */
-    private void updateSyncStatus(String symbol, String interval) {
-        String sql = "INSERT INTO data_sync_status (symbol, interval, earliest_candle, latest_candle, total_candles, last_sync_attempt) "
-                +
-                "SELECT ?, ?, MIN(time), MAX(time), COUNT(*), NOW() " +
-                "FROM candles WHERE symbol = ? AND interval = ? " +
-                "ON CONFLICT (symbol, interval) DO UPDATE SET " +
-                "earliest_candle = EXCLUDED.earliest_candle, " +
-                "latest_candle = EXCLUDED.latest_candle, " +
-                "total_candles = EXCLUDED.total_candles, " +
-                "last_sync_attempt = EXCLUDED.last_sync_attempt";
-
-        Connection conn = null;
-        try {
-            conn = timescaleClient.getConnection();
-            if (conn == null)
-                return;
-
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, symbol);
-                pstmt.setString(2, interval);
-                pstmt.setString(3, symbol);
-                pstmt.setString(4, interval);
-                pstmt.executeUpdate();
-            }
-        } catch (SQLException e) {
-            System.err.println("Error updating sync status: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    conn.close();
-                } catch (SQLException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
-    // Helper methods for nullable values
     private void setDoubleOrNull(PreparedStatement pstmt, int index, Double value) throws SQLException {
-        if (value != null) {
+        if (value != null)
             pstmt.setDouble(index, value);
-        } else {
+        else
             pstmt.setNull(index, Types.DOUBLE);
-        }
     }
 
     private void setIntegerOrNull(PreparedStatement pstmt, int index, Integer value) throws SQLException {
-        if (value != null) {
+        if (value != null)
             pstmt.setInt(index, value);
-        } else {
+        else
             pstmt.setNull(index, Types.INTEGER);
-        }
     }
 
     private Double getDoubleOrNull(ResultSet rs, String columnName) throws SQLException {
@@ -439,9 +392,6 @@ public class TimescaleRepository {
         return rs.wasNull() ? null : value;
     }
 
-    /**
-     * Get all currently tracked symbols
-     */
     public List<String[]> getTrackedSymbols() {
         List<String[]> symbols = new ArrayList<>();
         String sql = "SELECT symbol, exchange FROM tracked_symbols";
@@ -469,9 +419,6 @@ public class TimescaleRepository {
         return symbols;
     }
 
-    /**
-     * Add a new symbol to track
-     */
     public void addTrackedSymbol(String symbol, String exchange) {
         String sql = "INSERT INTO tracked_symbols (symbol, exchange) VALUES (?, ?) ON CONFLICT DO NOTHING";
         Connection conn = null;
@@ -496,9 +443,6 @@ public class TimescaleRepository {
         }
     }
 
-    /**
-     * Remove a symbol from tracking
-     */
     public void removeTrackedSymbol(String symbol) {
         String sql = "DELETE FROM tracked_symbols WHERE symbol = ?";
         Connection conn = null;
@@ -512,6 +456,29 @@ public class TimescaleRepository {
             }
         } catch (SQLException e) {
             System.err.println("Error removing tracked symbol: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                }
+            }
+        }
+    }
+
+    public void flushAllData() {
+        Connection conn = null;
+        try {
+            conn = timescaleClient.getConnection();
+            if (conn == null)
+                return;
+            try (Statement stmt = conn.createStatement()) {
+                stmt.executeUpdate("TRUNCATE TABLE candles");
+                stmt.executeUpdate("TRUNCATE TABLE data_sync_status");
+                System.out.println("TimescaleRepository: FLUSHED ALL DATA");
+            }
+        } catch (SQLException e) {
+            System.err.println("Error flushing all data: " + e.getMessage());
         } finally {
             if (conn != null) {
                 try {
@@ -556,29 +523,11 @@ public class TimescaleRepository {
         }
     }
 
-    /**
-     * Delete ALL candle data and sync status from the database
-     */
-    public void flushAllData() {
-        Connection conn = null;
-        try {
-            conn = timescaleClient.getConnection();
-            if (conn == null)
-                return;
-            try (Statement stmt = conn.createStatement()) {
-                stmt.executeUpdate("TRUNCATE TABLE candles");
-                stmt.executeUpdate("TRUNCATE TABLE data_sync_status");
-                System.out.println("TimescaleRepository: FLUSHED ALL DATA");
-            }
-        } catch (SQLException e) {
-            System.err.println("Error flushing all data: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    conn.close();
-                } catch (SQLException e) {
-                }
-            }
-        }
+    public void shutdown() {
+        flusher.shutdown();
+        flushQueue(); // Final flush
+    }
+
+    private static record WriteTask(List<Candle> candles, String symbol, String interval) {
     }
 }

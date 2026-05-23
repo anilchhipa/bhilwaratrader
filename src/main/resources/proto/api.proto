@@ -5,10 +5,18 @@ package com.algo.proto;
 option java_package = "com.algo.proto";
 option java_outer_classname = "ChartProtos";
 
+message RenkoBrick {
+    int64 t = 1;      // startTime
+    int64 et = 2;     // endTime
+    double o = 3;     // open
+    double c = 4;     // close
+}
+
 message CandleUpdate {
     string symbol = 1;
     string timeframe = 2;
     CandleData candle = 3;
+    repeated RenkoBrick renko = 4;
 }
 
 message CandleData {
@@ -40,6 +48,11 @@ message CandleData {
     double stDn2 = 20;
     int32 stTrend2 = 21;
     int32 whaleSignal = 22;
+
+    // Signal System
+    int32 signal = 23;       // +1 BUY, -1 SELL, 0 NO TRADE
+    double tradeScore = 24;  // Bayesian composite score (0.0–8.0)
+    double er = 25;          // Efficiency Ratio (0.0–1.0)
 }
 
 message BatchCandleUpdate {

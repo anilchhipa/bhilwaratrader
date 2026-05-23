@@ -1,6 +1,7 @@
 package com.algo.indicators;
 
 import com.algo.core.Candle;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -10,12 +11,20 @@ public class SuperTrendedMA {
     private double multiplier;
     private boolean changeATR;
 
-    private List<Double> srcHistory = new ArrayList<>();
-    private List<Double> trHistory = new ArrayList<>();
-    private List<Double> maHistory = new ArrayList<>();
-    private List<Double> upHistory = new ArrayList<>();
-    private List<Double> dnHistory = new ArrayList<>();
-    private List<Integer> trendHistory = new ArrayList<>();
+    // ArrayDeque gives O(1) head removal vs O(N) ArrayList.remove(0)
+    private final ArrayDeque<Double> srcHistory = new ArrayDeque<>(1001);
+    private final ArrayDeque<Double> trHistory = new ArrayDeque<>(1001);
+    private final ArrayDeque<Double> maHistory = new ArrayDeque<>(1001);
+    private final ArrayDeque<Double> upHistory = new ArrayDeque<>(1001);
+    private final ArrayDeque<Double> dnHistory = new ArrayDeque<>(1001);
+    private final ArrayDeque<Integer> trendHistory = new ArrayDeque<>(1001);
+
+    // Volatile snapshots for thread-safe, lock-free reads by external threads
+    // (UI/Broadcaster)
+    private volatile List<Double> maHistorySnapshot = java.util.Collections.emptyList();
+    private volatile List<Double> upHistorySnapshot = java.util.Collections.emptyList();
+    private volatile List<Double> dnHistorySnapshot = java.util.Collections.emptyList();
+    private volatile List<Integer> trendHistorySnapshot = java.util.Collections.emptyList();
 
     // State
     private double lastEma = 0;
@@ -25,6 +34,7 @@ public class SuperTrendedMA {
     private int prevTrend = 1;
     private double lastAtr = 0;
     private double lastClose = 0;
+    private double trueLastClose = 0;
 
     // Live variables to hold the temporary calculation before commit
     private double liveEma = 0;
@@ -33,6 +43,7 @@ public class SuperTrendedMA {
     private int liveTrend = 1;
     private double liveAtr = 0;
     private double liveClose = 0;
+    private double trueLiveClose = 0;
 
     private int stableHistorySize = 0;
 
@@ -46,12 +57,15 @@ public class SuperTrendedMA {
     /**
      * Adopts state from a known baseline (e.g. from database)
      */
-    public void adoptState(Double ma, Double up, Double dn, Integer trend, double lastPrice) {
+    public void adoptState(Double ma, Double up, Double dn, Integer trend, double lastPrice, double actualClose,
+            Double atr) {
         this.liveEma = (ma != null) ? ma : 0;
         this.liveUp = (up != null) ? up : 0;
         this.liveDn = (dn != null) ? dn : 0;
         this.liveTrend = (trend != null) ? trend : 1;
         this.liveClose = lastPrice;
+        this.trueLiveClose = actualClose;
+        this.liveAtr = (atr != null) ? atr : 0;
 
         this.lastEma = liveEma;
         this.lastUp = liveUp;
@@ -59,6 +73,8 @@ public class SuperTrendedMA {
         this.trend = liveTrend;
         this.prevTrend = liveTrend;
         this.lastClose = lastPrice;
+        this.trueLastClose = actualClose;
+        this.lastAtr = liveAtr;
 
         // Populate history with at least one point to prevent TR calculation issues
         if (ma != null) {
@@ -68,6 +84,7 @@ public class SuperTrendedMA {
             trendHistory.add(liveTrend);
             srcHistory.add(lastPrice);
         }
+        publishSnapshots();
     }
 
     public void commit() {
@@ -78,6 +95,8 @@ public class SuperTrendedMA {
         trend = liveTrend;
         lastAtr = liveAtr;
         lastClose = liveClose;
+        trueLastClose = trueLiveClose;
+        publishSnapshots();
     }
 
     public void update(Candle candle) {
@@ -88,40 +107,62 @@ public class SuperTrendedMA {
 
     public void updateLive(Candle candle) {
         calculateInternal(candle, false); // false = not new candle (overwrites last in lists)
+        publishSnapshots();
+    }
+
+    private void publishSnapshots() {
+        maHistorySnapshot = new ArrayList<>(maHistory);
+        upHistorySnapshot = new ArrayList<>(upHistory);
+        dnHistorySnapshot = new ArrayList<>(dnHistory);
+        trendHistorySnapshot = new ArrayList<>(trendHistory);
     }
 
     private void calculateInternal(Candle candle, boolean isNewCandle) {
-        double close = candle.getClose();
+        double price = candle.getLow(); // Using LOW instead of CLOSE as per user request
         double high = candle.getHigh();
         double low = candle.getLow();
+        double actualClose = candle.getClose(); // The actual intra-bar close
 
-        // Calculate TR
+        // Calculate TR using the true last close per Pine Script ta.tr
         double tr = 0;
-        if (srcHistory.size() > 0) {
-            tr = Math.max(high - low, Math.max(Math.abs(high - lastClose), Math.abs(low - lastClose)));
+        if (!srcHistory.isEmpty()) {
+            tr = Math.max(high - low, Math.max(Math.abs(high - trueLastClose), Math.abs(low - trueLastClose)));
         } else {
             tr = high - low;
         }
 
         // Calculate EMA - snap to price if lastEma is zero or negative
-        double k = 2.0 / (maLength + 1);
-        double currentEma = (lastEma <= 0 || Double.isNaN(lastEma)) ? close : close * k + lastEma * (1 - k);
+        double k_ma = 2.0 / (maLength + 1);
+        double currentEma = (lastEma <= 0 || Double.isNaN(lastEma)) ? price : price * k_ma + lastEma * (1 - k_ma);
 
-        // Calculate ATR
+        // Calculate ATR using RMA (standard) or EMA based on changeATR flag
         double currentAtr = 0;
-        if (trHistory.size() + (isNewCandle ? 1 : 0) >= atrPeriod) {
-            double sum = 0;
-            // Correctly sum exactly atrPeriod - 1 historical items.
-            // If new candle: trHistory has only closed candles.
-            // If live: trHistory includes the previous version of this same candle at the
-            // end.
-            int start = Math.max(0, trHistory.size() - atrPeriod + (isNewCandle ? 1 : 0));
-            int end = isNewCandle ? trHistory.size() : trHistory.size() - 1;
-            for (int i = start; i < end; i++) {
-                sum += trHistory.get(i);
+        int availableHistory = trHistory.size() + (isNewCandle ? 1 : 0);
+
+        // If lastAtr > 0 (Instant Sync from DB), we map seamlessly back into RMA
+        // ignoring slow warmup
+        if (availableHistory >= atrPeriod || lastAtr > 0) {
+            if (lastAtr <= 0) {
+                // Initialize with Simple Moving Average (SMA).
+                // ArrayDeque doesn't support indexed get(), so snapshot to array once.
+                Double[] trArr = trHistory.toArray(new Double[0]);
+                double sum = 0;
+                int start = Math.max(0, trArr.length - atrPeriod + (isNewCandle ? 1 : 0));
+                int end = isNewCandle ? trArr.length : trArr.length - 1;
+                for (int i = start; i < end; i++)
+                    sum += trArr[i];
+                sum += tr;
+                currentAtr = sum / atrPeriod;
+            } else {
+                if (changeATR) {
+                    // RMA Smoothing (Standard ATR): (prevAtr * (n-1) + tr) / n
+                    currentAtr = (lastAtr * (atrPeriod - 1) + tr) / atrPeriod;
+                } else {
+                    // EMA Smoothing: tr * k_atr + lastAtr * (1-k_atr) where k_atr = 2/(n+1)
+                    double k_atr = 2.0 / (atrPeriod + 1);
+                    currentAtr = tr * k_atr + lastAtr * (1 - k_atr);
+                }
             }
-            sum += tr;
-            currentAtr = sum / atrPeriod;
         }
 
         // SuperTrend Logic
@@ -140,9 +181,9 @@ public class SuperTrendedMA {
                 up = (lastClose > lastUp) ? Math.max(up, lastUp) : up;
                 dn = (lastClose < lastDn) ? Math.min(dn, lastDn) : dn;
 
-                if (currentTrend == -1 && close > dn) {
+                if (currentTrend == -1 && price > lastDn) {
                     currentTrend = 1;
-                } else if (currentTrend == 1 && close < up) {
+                } else if (currentTrend == 1 && price < lastUp) {
                     currentTrend = -1;
                 }
             } else {
@@ -159,17 +200,18 @@ public class SuperTrendedMA {
         liveDn = currentDn;
         liveTrend = currentTrend;
         liveAtr = currentAtr;
-        liveClose = close;
+        liveClose = price;
+        trueLiveClose = actualClose;
 
         if (isNewCandle) {
-            srcHistory.add(close);
-            trHistory.add(tr);
-            maHistory.add(currentEma);
-            upHistory.add(currentUp);
-            dnHistory.add(currentDn);
-            trendHistory.add(currentTrend);
+            srcHistory.addLast(price);
+            trHistory.addLast(tr);
+            maHistory.addLast(currentEma);
+            upHistory.addLast(currentUp);
+            dnHistory.addLast(currentDn);
+            trendHistory.addLast(currentTrend);
         } else {
-            updateLastInHistory(srcHistory, close);
+            updateLastInHistory(srcHistory, price);
             updateLastInHistory(trHistory, tr);
             updateLastInHistory(maHistory, currentEma);
             updateLastInHistory(upHistory, currentUp);
@@ -178,26 +220,28 @@ public class SuperTrendedMA {
         }
     }
 
-    private <T> void updateLastInHistory(List<T> history, T value) {
+    private <T> void updateLastInHistory(ArrayDeque<T> history, T value) {
         if (!history.isEmpty()) {
-            history.set(history.size() - 1, value);
+            history.pollLast();
+            history.addLast(value);
         }
     }
 
     private void limitHistory() {
+        // pollFirst() is O(1) on ArrayDeque; the old remove(0) was O(N) on ArrayList
         if (srcHistory.size() > 1000) {
-            srcHistory.remove(0);
-            trHistory.remove(0);
-            maHistory.remove(0);
-            upHistory.remove(0);
-            dnHistory.remove(0);
-            trendHistory.remove(0);
+            srcHistory.pollFirst();
+            trHistory.pollFirst();
+            maHistory.pollFirst();
+            upHistory.pollFirst();
+            dnHistory.pollFirst();
+            trendHistory.pollFirst();
         }
     }
 
     /** Returns the live (intra-candle) MA value without list access. */
     public double getLiveMa() {
-        return liveEma;
+        return (liveTrend == 1) ? liveUp : liveDn;
     }
 
     /** Returns the live (intra-candle) upper band without list access. */
@@ -215,8 +259,12 @@ public class SuperTrendedMA {
         return liveTrend;
     }
 
+    public double getLiveAtr() {
+        return liveAtr;
+    }
+
     public double getMA() {
-        return liveEma;
+        return (liveTrend == 1) ? liveUp : liveDn;
     }
 
     public double getUp() {
@@ -232,34 +280,31 @@ public class SuperTrendedMA {
     }
 
     /**
-     * Returns a defensive snapshot of MA history. Safe for external/concurrent
-     * reads.
+     * Returns a defensive snapshot of MA history.
+     * Lock-free read via volatile snapshot updated on candle close/tick.
      */
     public List<Double> getMaHistory() {
-        return new ArrayList<>(maHistory);
+        return maHistorySnapshot;
     }
 
     /**
-     * Returns a defensive snapshot of upper-band history. Safe for
-     * external/concurrent reads.
+     * Returns a defensive snapshot of upper-band history.
      */
     public List<Double> getUpHistory() {
-        return new ArrayList<>(upHistory);
+        return upHistorySnapshot;
     }
 
     /**
-     * Returns a defensive snapshot of lower-band history. Safe for
-     * external/concurrent reads.
+     * Returns a defensive snapshot of lower-band history.
      */
     public List<Double> getDnHistory() {
-        return new ArrayList<>(dnHistory);
+        return dnHistorySnapshot;
     }
 
     /**
-     * Returns a defensive snapshot of trend history. Safe for external/concurrent
-     * reads.
+     * Returns a defensive snapshot of trend history.
      */
     public List<Integer> getTrendHistory() {
-        return new ArrayList<>(trendHistory);
+        return trendHistorySnapshot;
     }
 }

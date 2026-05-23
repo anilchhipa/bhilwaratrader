@@ -103,6 +103,13 @@
             <artifactId>protobuf-java</artifactId>
             <version>3.25.1</version>
         </dependency>
+
+        <!-- JCTools for Low-Latency Lock-Free Queues -->
+        <dependency>
+            <groupId>org.jctools</groupId>
+            <artifactId>jctools-core</artifactId>
+            <version>4.0.2</version>
+        </dependency>
     </dependencies>
 
     <build>

@@ -79,12 +79,12 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
     return (
         <div
             className="premium-widget-panel"
-            style={{
+            style={window.innerWidth > 768 ? {
                 left: `${Math.min(window.innerWidth - 340, Math.max(20, position.x))}px`,
                 top: `${Math.min(window.innerHeight - 340, Math.max(20, position.y))}px`,
                 width: '340px',
                 zIndex: 1100
-            }}
+            } : { zIndex: 1100 }}
         >
             <div className="premium-widget-header" onMouseDown={startDrag} style={{ cursor: 'move' }}>
                 <div className="premium-widget-title">

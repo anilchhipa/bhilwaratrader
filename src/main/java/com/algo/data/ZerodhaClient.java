@@ -33,6 +33,7 @@ public class ZerodhaClient {
     private String totpSecret;
     private String accessToken;
     private com.algo.core.IndicatorConfig indicatorConfig;
+    private static final String CACHE_FILE = "instruments_cache.csv";
 
     public ZerodhaClient(String userId, String password, String apiKey, String apiSecret, String totpSecret,
             com.algo.core.IndicatorConfig indicatorConfig) {
@@ -47,22 +48,25 @@ public class ZerodhaClient {
         kiteConnect.setUserId(userId);
     }
 
+    // ── Instrument index: built once after loading, enables O(1) symbol lookup ──
+    private final java.util.Map<String, com.zerodhatech.models.Instrument> instrumentIndex = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, Integer> lotSizeCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     public int getLotSize(String symbol) {
-        if (lotSizeCache.containsKey(symbol))
-            return lotSizeCache.get(symbol);
-
-        java.util.List<com.zerodhatech.models.Instrument> all = getAllInstruments();
-        if (all != null) {
-            for (com.zerodhatech.models.Instrument inst : all) {
-                if (symbol.equals(inst.tradingsymbol)) {
-                    lotSizeCache.put(symbol, inst.lot_size);
-                    return inst.lot_size;
-                }
+        return lotSizeCache.computeIfAbsent(symbol, s -> {
+            // O(1) lookup via index instead of O(N) linear scan
+            com.zerodhatech.models.Instrument inst = instrumentIndex.get(s);
+            if (inst != null)
+                return inst.lot_size;
+            // Index not built yet — fall back to lazy full load
+            java.util.List<com.zerodhatech.models.Instrument> all = getAllInstruments();
+            if (all != null) {
+                com.zerodhatech.models.Instrument found = instrumentIndex.get(s);
+                if (found != null)
+                    return found.lot_size;
             }
-        }
-        return 1; // Default
+            return 1; // Default
+        });
     }
 
     public boolean login() {
@@ -81,6 +85,9 @@ public class ZerodhaClient {
         }
 
         java.util.Map<String, String> env = new java.util.HashMap<>(System.getenv());
+        // Skip strict system dependency checks to avoid blocking on missing fonts/libs
+        // that are not needed for simple headless login.
+        env.put("PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS", "1");
 
         try (Playwright playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env))) {
             BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions().setHeadless(true).setArgs(
@@ -287,20 +294,147 @@ public class ZerodhaClient {
     }
 
     private java.util.List<com.zerodhatech.models.Instrument> instrumentCache = null;
+    private long lastFetchAttempt = 0;
+    private final Object cacheLock = new Object();
 
     public java.util.List<com.zerodhatech.models.Instrument> getAllInstruments() {
-        if (instrumentCache == null && kiteConnect != null) {
-            try {
-                logger.info("ZerodhaClient: Initializing full instrument cache...");
-                instrumentCache = kiteConnect.getInstruments();
-                logger.info("ZerodhaClient: Cached {} instruments.", instrumentCache.size());
-            } catch (KiteException | IOException e) {
-                logger.error("ZerodhaClient: Failed to fetch all instruments: {}", e.getMessage());
-            } catch (Exception e) {
-                logger.error("ZerodhaClient: Unexpected error fetching instruments: {}", e.getMessage());
+        synchronized (cacheLock) {
+            if (instrumentCache != null && !instrumentCache.isEmpty())
+                return instrumentCache;
+
+            // Load from disk if RAM cache is empty
+            if (instrumentCache == null) {
+                instrumentCache = loadInstrumentsFromDisk();
+                if (instrumentCache != null && !instrumentCache.isEmpty()) {
+                    logger.info("ZerodhaClient: Loaded {} instruments from local disk cache.", instrumentCache.size());
+                    // Don't return yet; we might still want to try refreshing from API if it's
+                    // old, but for now we provide immediate data.
+                }
+            }
+
+            // Rate limit API retries to once every 60 seconds
+            long now = System.currentTimeMillis();
+            if (now - lastFetchAttempt < 60000) {
+                return instrumentCache; // Return stale cache instead of null
+            }
+
+            lastFetchAttempt = now;
+
+            if (kiteConnect != null) {
+                try {
+                    logger.info("ZerodhaClient: Refreshing instrument cache from public CDN...");
+                    java.net.URL url = new java.net.URL("https://api.kite.trade/instruments");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(30000);
+
+                    if (conn.getResponseCode() == 200) {
+                        java.util.List<com.zerodhatech.models.Instrument> list = new java.util.ArrayList<>();
+                        java.lang.StringBuilder sb = new java.lang.StringBuilder();
+                        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(conn.getInputStream()))) {
+                            String header = reader.readLine();
+                            sb.append(header).append("\n");
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                sb.append(line).append("\n");
+                                com.zerodhatech.models.Instrument inst = parseInstrumentLine(line);
+                                if (inst != null) {
+                                    list.add(inst);
+                                }
+                            }
+                        }
+                        instrumentCache = list;
+                        saveInstrumentsToDisk(sb.toString());
+                        logger.info("ZerodhaClient: Successfully cached {} instruments and saved to disk.",
+                                instrumentCache.size());
+                    } else if (conn.getResponseCode() == 429) {
+                        logger.warn("ZerodhaClient: Public CDN hit 429 (Too many requests). Using {} cache.",
+                                (instrumentCache != null ? "stale" : "no"));
+                    } else {
+                        logger.warn("ZerodhaClient: Public CDN failed (HTTP {}). Trying Kite API fallback...",
+                                conn.getResponseCode());
+                        java.util.List<com.zerodhatech.models.Instrument> fallback = kiteConnect.getInstruments();
+                        instrumentCache = fallback;
+                        if (fallback != null) {
+                            instrumentIndex.clear();
+                            for (com.zerodhatech.models.Instrument inst : fallback) {
+                                instrumentIndex.put(inst.tradingsymbol, inst);
+                            }
+                        }
+                    }
+                } catch (KiteException e) {
+                    logger.error("ZerodhaClient: Kite API instrument fetch failed: [Code: {}] {}", e.code, e.message);
+                } catch (Exception e) {
+                    logger.error("ZerodhaClient: Unexpected error fetching instruments: {}", e.getMessage());
+                }
             }
         }
         return instrumentCache;
+    }
+
+    private com.zerodhatech.models.Instrument parseInstrumentLine(String line) {
+        try {
+            String[] cols = line.split(",");
+            if (cols.length >= 12) {
+                com.zerodhatech.models.Instrument inst = new com.zerodhatech.models.Instrument();
+                inst.instrument_token = Long.parseLong(cols[0]);
+                inst.exchange_token = cols[1].isEmpty() ? 0 : Long.parseLong(cols[1]);
+                inst.tradingsymbol = cols[2];
+                inst.name = cols[3].replace("\"", "");
+                inst.last_price = parseDouble(cols[4]);
+                if (!cols[5].isEmpty()) {
+                    try {
+                        inst.expiry = new java.text.SimpleDateFormat("yyyy-MM-dd").parse(cols[5]);
+                    } catch (Exception ignored) {
+                    }
+                }
+                inst.strike = cols[6];
+                inst.tick_size = parseDouble(cols[7]);
+                inst.lot_size = (int) parseDouble(cols[8]);
+                inst.instrument_type = cols[9];
+                inst.segment = cols[10];
+                inst.exchange = cols[11];
+                return inst;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private void saveInstrumentsToDisk(String data) {
+        try {
+            java.nio.file.Files.writeString(java.nio.file.Paths.get(CACHE_FILE), data);
+        } catch (java.io.IOException e) {
+            logger.error("ZerodhaClient: Failed to save instrument cache to disk: {}", e.getMessage());
+        }
+    }
+
+    private java.util.List<com.zerodhatech.models.Instrument> loadInstrumentsFromDisk() {
+        java.io.File file = new java.io.File(CACHE_FILE);
+        if (!file.exists())
+            return null;
+
+        java.util.List<com.zerodhatech.models.Instrument> list = new java.util.ArrayList<>();
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(file))) {
+            reader.readLine(); // Skip header
+            String line;
+            while ((line = reader.readLine()) != null) {
+                com.zerodhatech.models.Instrument inst = parseInstrumentLine(line);
+                if (inst != null)
+                    list.add(inst);
+            }
+            // Build O(1) index from disk cache
+            instrumentIndex.clear();
+            for (com.zerodhatech.models.Instrument inst : list) {
+                instrumentIndex.put(inst.tradingsymbol, inst);
+            }
+            return list;
+        } catch (Exception e) {
+            logger.error("ZerodhaClient: Failed to load instrument cache from disk: {}", e.getMessage());
+            return null;
+        }
     }
 
     private static final java.util.Set<String> SENSEX_30_STOCKS = new java.util.HashSet<>(
@@ -406,6 +540,10 @@ public class ZerodhaClient {
 
     public String getAccessToken() {
         return accessToken;
+    }
+
+    public boolean isLoggedIn() {
+        return accessToken != null && !accessToken.isEmpty();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -705,12 +843,9 @@ public class ZerodhaClient {
         logger.info("ZerodhaClient: Resolving instrument tokens for {} symbols...",
                 tokenManager.getAllSymbols().size());
 
-        // Group symbols by their exchange to minimize API calls (one call per exchange)
         java.util.Map<String, java.util.List<String>> byExchange = new java.util.HashMap<>();
         for (String symbol : tokenManager.getAllSymbols()) {
             String exchange = tokenManager.getExchangeType(symbol);
-            // Dynamic override: indices like SENSEX must be resolved against BSE
-            // regardless of what the database says (handles legacy BFO/NFO mapping bugs)
             if (symbol.equals("SENSEX") || symbol.equals("BANKEX")) {
                 exchange = "BSE";
             }
@@ -719,47 +854,76 @@ public class ZerodhaClient {
 
         for (java.util.Map.Entry<String, java.util.List<String>> entry : byExchange.entrySet()) {
             String exchange = entry.getKey();
-            java.util.List<String> symbols = entry.getValue();
-            java.util.Set<String> symbolSet = new java.util.HashSet<>(symbols);
+            java.util.Set<String> symbolSet = new java.util.HashSet<>(entry.getValue());
 
             try {
+                checkRateLimit();
                 logger.info("ZerodhaClient: Fetching instrument list for exchange: {}", exchange);
                 java.util.List<com.zerodhatech.models.Instrument> instruments = kiteConnect.getInstruments(exchange);
-                logger.info("ZerodhaClient: Got {} instruments from {}", instruments.size(), exchange);
 
-                for (com.zerodhatech.models.Instrument inst : instruments) {
-                    // Check direct trading symbol match (standard)
-                    if (symbolSet.contains(inst.tradingsymbol)) {
-                        String token = String.valueOf(inst.instrument_token);
-                        tokenManager.updateToken(inst.tradingsymbol, token);
-                        logger.info("ZerodhaClient: Resolved {} -> token={} (exchange={}, type={}, expiry={})",
-                                inst.tradingsymbol, token, inst.exchange, inst.instrument_type, inst.expiry);
-                        symbolSet.remove(inst.tradingsymbol);
-                    }
-                    // Fallback for indices (e.g. SENSEX might be listed as 'BSE SENSEX' name but we
-                    // want 'SENSEX' symbol)
-                    else {
-                        for (String targetSym : new java.util.ArrayList<>(symbolSet)) {
-                            // Case-insensitive name match (handles 'SENSEX' vs 'SENSEX' name discrepancies)
-                            if (inst.name != null && inst.name.equalsIgnoreCase(targetSym)) {
-                                String token = String.valueOf(inst.instrument_token);
-                                tokenManager.updateToken(targetSym, token);
-                                logger.info("ZerodhaClient: Resolved {} (via name '{}') -> token={} (exchange={})",
-                                        targetSym, inst.name, token, inst.exchange);
-                                symbolSet.remove(targetSym);
-                            }
-                        }
-                    }
+                if (instruments != null && !instruments.isEmpty()) {
+                    processResolvedInstruments(instruments, symbolSet, tokenManager, exchange);
+                } else {
+                    logger.warn("ZerodhaClient: Exchange fetch for {} returned null. Trying global fallback...",
+                            exchange);
+                    processResolvedInstruments(getAllInstruments(), symbolSet, tokenManager, exchange);
                 }
+            } catch (KiteException e) {
+                String msg = e.message != null ? e.message
+                        : (e.getMessage() != null ? e.getMessage() : "KiteException (code: " + e.code + ")");
+                logger.warn("ZerodhaClient: Kite error fetching {} ({}). Attempting global fallback...", exchange, msg);
+                processResolvedInstruments(getAllInstruments(), symbolSet, tokenManager, exchange);
+            } catch (Throwable e) {
+                logger.warn("ZerodhaClient: Unexpected error fetching {} ({}). Attempting global fallback...", exchange,
+                        e.getMessage() != null ? e.getMessage() : e.toString());
+                processResolvedInstruments(getAllInstruments(), symbolSet, tokenManager, exchange);
+            }
 
-                if (!symbolSet.isEmpty()) {
-                    logger.warn(
-                            "ZerodhaClient: WARNING - could not resolve tokens for: {}. Check if trading symbols are correct and contracts are active.",
-                            symbolSet);
+            if (!symbolSet.isEmpty()) {
+                logger.warn("ZerodhaClient: WARNING - could not resolve tokens for symbols: {}", symbolSet);
+            }
+        }
+    }
+
+    private void processResolvedInstruments(java.util.List<com.zerodhatech.models.Instrument> instruments,
+            java.util.Set<String> symbolSet, TokenManager tokenManager, String exchange) {
+        if (instruments == null || symbolSet.isEmpty())
+            return;
+
+        // Pre-build a name→symbol map (lowercase) to avoid O(N×M) inner loop with
+        // per-instrument ArrayList allocations. One pass to build, one to scan.
+        java.util.Map<String, String> nameToTarget = new java.util.HashMap<>();
+        for (String targetSym : symbolSet) {
+            nameToTarget.put(targetSym.toLowerCase(), targetSym);
+        }
+
+        for (com.zerodhatech.models.Instrument inst : instruments) {
+            if (symbolSet.isEmpty())
+                break;
+
+            if (!inst.exchange.equalsIgnoreCase(exchange))
+                continue;
+
+            // Primary match: by trading symbol
+            if (symbolSet.contains(inst.tradingsymbol)) {
+                String token = String.valueOf(inst.instrument_token);
+                tokenManager.updateToken(inst.tradingsymbol, token);
+                logger.info("ZerodhaClient: Resolved {} -> token={} (exchange={})",
+                        inst.tradingsymbol, token, inst.exchange);
+                symbolSet.remove(inst.tradingsymbol);
+                nameToTarget.remove(inst.tradingsymbol.toLowerCase());
+            }
+            // Secondary match: by instrument name (O(1) map lookup instead of O(M) loop)
+            else if (inst.name != null) {
+                String targetSym = nameToTarget.get(inst.name.toLowerCase());
+                if (targetSym != null && symbolSet.contains(targetSym)) {
+                    String token = String.valueOf(inst.instrument_token);
+                    tokenManager.updateToken(targetSym, token);
+                    logger.info("ZerodhaClient: Resolved {} (via name '{}') -> token={} (exchange={})",
+                            targetSym, inst.name, token, inst.exchange);
+                    symbolSet.remove(targetSym);
+                    nameToTarget.remove(inst.name.toLowerCase());
                 }
-
-            } catch (com.zerodhatech.kiteconnect.kitehttp.exceptions.KiteException | Exception e) {
-                logger.error("ZerodhaClient: Failed to fetch instruments for {}: {}", exchange, e.getMessage());
             }
         }
     }
@@ -800,6 +964,11 @@ public class ZerodhaClient {
             java.time.LocalDateTime startDate, java.time.LocalDateTime endDate, String exchange) {
         java.util.List<com.algo.core.Candle> history = new java.util.ArrayList<>();
 
+        if (!isLoggedIn()) {
+            logger.warn("fetchHistory: Skipping fetch for {} because Zerodha is not logged in.", instrumentToken);
+            return history;
+        }
+
         try {
             int chunkDays = 30;
 
@@ -811,18 +980,31 @@ public class ZerodhaClient {
                     currentTo = endDate;
                 }
 
-                Date fromDate = Date.from(currentFrom.atZone(ZoneId.systemDefault()).toInstant());
-                Date toDate = Date.from(currentTo.atZone(ZoneId.systemDefault()).toInstant());
-
                 logger.info("Fetching History for {} ({})", instrumentToken, interval);
-
                 checkRateLimit();
 
                 try {
                     Date fromD = Date.from(currentFrom.atZone(ZoneId.systemDefault()).toInstant());
                     Date toD = Date.from(currentTo.atZone(ZoneId.systemDefault()).toInstant());
-                    HistoricalData data = kiteConnect.getHistoricalData(fromD, toD, instrumentToken, interval, false,
-                            false);
+
+                    HistoricalData data = null;
+                    int retries = 2;
+                    while (retries > 0) {
+                        try {
+                            data = kiteConnect.getHistoricalData(fromD, toD, instrumentToken, interval, false, false);
+                            break; // Success
+                        } catch (KiteException e) {
+                            if (e.code == 429) {
+                                logger.warn(
+                                        "Kite API 429 (Too many requests) fetching history for {}. Retrying in 2s...",
+                                        instrumentToken);
+                                Thread.sleep(2000);
+                                retries--;
+                            } else {
+                                throw e;
+                            }
+                        }
+                    }
 
                     if (data != null && data.dataArrayList != null && !data.dataArrayList.isEmpty()) {
                         for (HistoricalData d : data.dataArrayList) {

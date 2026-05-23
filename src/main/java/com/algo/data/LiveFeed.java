@@ -102,23 +102,8 @@ public class LiveFeed {
                         if (symbol == null)
                             continue;
 
-                        long lastQty = (long) tick.getLastTradedQuantity();
-                        double delta = 0;
-
-                        // Identify aggressive side based on Tick vs Bid/Ask
-                        if (tick.getMarketDepth() != null && tick.getMarketDepth().get("buy") != null
-                                && tick.getMarketDepth().get("sell") != null) {
-                            double bestBid = tick.getMarketDepth().get("buy").get(0).getPrice();
-                            double bestAsk = tick.getMarketDepth().get("sell").get(0).getPrice();
-
-                            if (tick.getLastTradedPrice() >= bestAsk)
-                                delta = (double) lastQty;
-                            else if (tick.getLastTradedPrice() <= bestBid)
-                                delta = (double) -lastQty;
-                        }
-
                         if (engine != null) {
-                            engine.onTick(tokenStr, tick.getLastTradedPrice(), delta);
+                            engine.onTick(tokenStr, tick.getLastTradedPrice(), tick.getLastTradedQuantity());
                         }
                     }
                 }
@@ -126,7 +111,8 @@ public class LiveFeed {
         });
     }
 
-    public void processTick(String symbol, String token, double price, double delta, java.time.LocalDateTime tickTime) {
+    public void processTick(String symbol, String token, double price, double quantity,
+            java.time.LocalDateTime tickTime) {
         if (symbol == null)
             return;
 
@@ -135,7 +121,7 @@ public class LiveFeed {
         }
 
         if (engine != null) {
-            engine.onTick(token, price, delta);
+            engine.onTick(token, price, quantity);
         }
     }
 

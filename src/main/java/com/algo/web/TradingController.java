@@ -309,6 +309,9 @@ public class TradingController {
                     copy.setStUp(active.getStUp());
                     copy.setStDn(active.getStDn());
                     copy.setStTrend(active.getStTrend());
+                    copy.setSignal(active.getSignal());
+                    copy.setTradeScore(active.getTradeScore());
+                    copy.setEr(active.getEr());
 
                     if (shouldReplace) {
                         history.set(history.size() - 1, copy); // Replace the incomplete DB candle with the precise live

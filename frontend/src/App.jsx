@@ -15,6 +15,10 @@ function App() {
   const [trackedSymbols, setTrackedSymbols] = useState([]);
   const [scannerCategory, setScannerCategory] = useState('STOCKS');
   const [scannerTf, setScannerTf] = useState('3min');
+  useEffect(() => {
+    document.title = "Bhilwara Trader | Pro Dashboard";
+  }, []);
+
   const [symbolPrices, setSymbolPrices] = useState({});
   const [isOffline, setIsOffline] = useState(false);
   const scannerCategoryRef = useRef('STOCKS');
@@ -192,14 +196,27 @@ function App() {
 
 
 
-  // Keyboard Navigation
+  const [globalResetTrigger, setGlobalResetTrigger] = useState(0);
+
+  const handleGlobalReset = () => setGlobalResetTrigger(Date.now());
+
+  // Global Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Escape works globally
-      if (e.key === 'Escape' || e.key === 'Esc' || e.keyCode === 27) {
-        setMaximizedChart(null);
-        // Also close widgets if needed
-        return;
+      // Escape Priority: 1. Close Maximized 2. Exit Zen 3. Global Reset
+      if (e.key === 'Escape') {
+        if (maximizedChart) {
+          setMaximizedChart(null);
+        } else if (isZenMode) {
+          setIsZenMode(false);
+        } else {
+          handleGlobalReset();
+        }
+      }
+
+      if (e.shiftKey && (e.key === 'R' || e.key === 'r')) {
+        e.preventDefault();
+        handleGlobalReset();
       }
 
       // Ignore if user is typing in an input or textarea
@@ -213,19 +230,19 @@ function App() {
           setPageIndex(p => Math.min(Math.max(0, maxPages - 1), p + 1));
           break;
         case 's': case 'S':
-          if (scannerCategories['STOCKS']) { setScannerCategoryWithRef('STOCKS'); setPageIndex(0); }
+          if (scannerCategories['STOCKS']) { setScannerCategoryWithRef('STOCKS'); setPageIndex(0); setMaximizedChart(null); }
           break;
         case 'f': case 'F':
-          if (scannerCategories['FUTURES']) { setScannerCategoryWithRef('FUTURES'); setPageIndex(0); }
+          if (scannerCategories['FUTURES']) { setScannerCategoryWithRef('FUTURES'); setPageIndex(0); setMaximizedChart(null); }
           break;
         case 'c': case 'C':
-          if (scannerCategories['CALLS']) { setScannerCategoryWithRef('CALLS'); setPageIndex(0); }
+          if (scannerCategories['CALLS']) { setScannerCategoryWithRef('CALLS'); setPageIndex(0); setMaximizedChart(null); }
           break;
         case 'p': case 'P':
-          if (scannerCategories['PUTS']) { setScannerCategoryWithRef('PUTS'); setPageIndex(0); }
+          if (scannerCategories['PUTS']) { setScannerCategoryWithRef('PUTS'); setPageIndex(0); setMaximizedChart(null); }
           break;
         case 'i': case 'I':
-          if (scannerCategories['INDEX']) { setScannerCategoryWithRef('INDEX'); setPageIndex(0); }
+          if (scannerCategories['INDEX']) { setScannerCategoryWithRef('INDEX'); setPageIndex(0); setMaximizedChart(null); }
           break;
         case 'g': case 'G':
           setGridLayout(prev => {
@@ -284,16 +301,13 @@ function App() {
         case 'z': case 'Z':
           setIsZenMode(prev => !prev);
           break;
-        case 'Escape':
-          setMaximizedChart(null);
-          break;
         default:
           break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [maxPages, setScannerCategoryWithRef, scannerCategories]);
+  }, [maxPages, setScannerCategoryWithRef, scannerCategories, maximizedChart]);
 
   return (
     <LiveFeedProvider>
@@ -313,7 +327,7 @@ function App() {
                 {/* Header Center: Navigation & Categories */}
                 <div className="header-center">
                   {!maximizedChart && (
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '4px' }}>
                       <div className="scanner-tf-selector" style={{ margin: 0 }}>
                         {['1min', '3min', '5min', '15min'].map(tf => (
                           <button
@@ -321,76 +335,88 @@ function App() {
                             className={`tf-tab ${scannerTf === tf ? 'active' : ''}`}
                             onClick={() => { setScannerTfWithRef(tf); setPageIndex(0); }}
                           >
-                            {tf.toUpperCase()}
+                            {tf.replace('min', 'M').toUpperCase()}
                           </button>
                         ))}
                       </div>
                     </div>
                   )}
-                  <div className="scanner-category-tabs" style={{ margin: 0 }}>
-                    {Object.keys(scannerCategories).map(cat => (
-                      <button
-                        key={cat}
-                        className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
-                        onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); }}
-                      >
-                        {cat} ({scannerCategories[cat].length})
-                      </button>
-                    ))}
-                  </div>
-                </div>
 
-                {/* Header Right: Pagination & Tools */}
-                <div className="header-right">
-                  {/* Sync Indicator */}
-                  <div className="scanner-tf-selector" style={{
-                    marginRight: '8px',
-                    width: '74px',
+                  {/* Sync Indicator (Centralized) */}
+                  <div className="scanner-tf-selector sync-box" data-tooltip="Next Candle Sync" style={{
+                    margin: 0,
+                    width: '54px',
                     justifyContent: 'center',
-                    gap: '6px',
+                    gap: '4px',
                     background: syncSeconds <= 30 ? 'rgba(251, 191, 36, 0.12)' : 'rgba(0,0,0,0.4)',
                     border: syncSeconds <= 30 ? '1px solid rgba(251, 191, 36, 0.4)' : '1px solid rgba(255,255,255,0.1)',
                   }}>
                     <div style={{
-                      width: '5px',
-                      height: '5px',
+                      width: '4px',
+                      height: '4px',
                       borderRadius: '50%',
                       background: syncSeconds <= 30 ? '#fbbf24' : '#64748b',
                       boxShadow: syncSeconds <= 10 ? '0 0 10px #fbbf24' : 'none',
-                      animation: syncSeconds <= 10 ? 'pulse 1s infinite' : 'none'
                     }} />
                     <span style={{
-                      fontSize: '10px',
+                      fontSize: '9px',
                       fontWeight: '900',
                       color: syncSeconds <= 30 ? '#fbbf24' : '#94a3b8',
-                      letterSpacing: '0.4px',
                       fontFamily: 'monospace'
                     }}>
                       {Math.floor(syncSeconds / 60)}:{(syncSeconds % 60).toString().padStart(2, '0')}
                     </span>
                   </div>
-                  <div className="scanner-tf-selector" style={{ margin: 0, width: '120px', justifyContent: 'space-between', gap: '2px', marginRight: '8px' }}>
-                    <button disabled={pageIndex === 0} onClick={() => setPageIndex(p => p - 1)} className="tf-tab" style={{ cursor: pageIndex === 0 ? 'not-allowed' : 'pointer', opacity: pageIndex === 0 ? 0.3 : 1, padding: '2px', minWidth: '20px', height: '18px' }}>◀</button>
-                    <span style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.4px', flex: 1 }}>PAGE {pageIndex + 1} / {maxPages || 1}</span>
-                    <button disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex(p => p + 1)} className="tf-tab" style={{ cursor: pageIndex >= maxPages - 1 ? 'not-allowed' : 'pointer', opacity: pageIndex >= maxPages - 1 ? 0.3 : 1, padding: '2px', minWidth: '20px', height: '18px' }}>▶</button>
+
+                  {/* Page Navigation (Centralized) */}
+                  <div className="scanner-tf-selector page-nav-box" style={{ margin: 0, justifyContent: 'space-between', gap: '2px' }}>
+                    <button disabled={pageIndex === 0} onClick={() => setPageIndex(p => p - 1)} className="tf-tab" data-tooltip="Previous Page" style={{ cursor: pageIndex === 0 ? 'not-allowed' : 'pointer', opacity: pageIndex === 0 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>◀</button>
+                    <span className="page-label" style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.4px', padding: '0 4px' }}>PAGE {pageIndex + 1}/{maxPages || 1}</span>
+                    <span className="page-label-small" style={{ display: 'none', color: '#cbd5e1', fontSize: '10px', fontWeight: '900', alignItems: 'center', justifyContent: 'center' }}>{pageIndex + 1}/{maxPages || 1}</span>
+                    <button disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex(p => p + 1)} className="tf-tab" data-tooltip="Next Page" style={{ cursor: pageIndex >= maxPages - 1 ? 'not-allowed' : 'pointer', opacity: pageIndex >= maxPages - 1 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>▶</button>
                   </div>
 
-                  <div className="scanner-tf-selector" style={{ margin: 0 }}>
+                  <div className="scanner-category-tabs" style={{ margin: 0 }}>
+                    {Object.keys(scannerCategories).map(cat => {
+                      const labels = { INDEX: 'IN', STOCKS: 'ST', FUTURES: 'FU', CALLS: 'CL', PUTS: 'PT' };
+                      return (
+                        <button
+                          key={cat}
+                          className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
+                          onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); }}
+                        >
+                          {labels[cat] || cat} <span className="cat-count">({scannerCategories[cat].length})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Header Right: Tools */}
+                <div className="header-right">
+                  <div className="scanner-tf-selector" style={{ margin: 0, padding: '3px 6px', gap: '8px', height: '28px' }}>
                     <button
                       className={`tf-tab ${activeWidgets.manage ? 'active' : ''}`}
                       onClick={() => toggleWidget('manage')}
-                      title="Manage Symbols"
-                      style={{ padding: '0px', minWidth: '24px', height: '18px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+                      data-tooltip="Manage Symbols"
+                      style={{ padding: '0px', minWidth: '28px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                      </svg>
                     </button>
+
                     <button
                       className={`tf-tab ${activeWidgets.indicators ? 'active' : ''}`}
                       onClick={() => toggleWidget('indicators')}
-                      title="Indicators Settings"
-                      style={{ padding: '0px', minWidth: '24px', height: '18px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+                      data-tooltip="Configuration"
+                      style={{ padding: '0px', minWidth: '28px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                      </svg>
                     </button>
                   </div>
                 </div>
@@ -405,11 +431,11 @@ function App() {
                   gap: '10px',
                   padding: '0',
                   background: '#020617',
-                  height: isZenMode ? 'calc(100vh - 20px)' : 'calc(100vh - 120px)', // full height minus headers
+                  height: window.innerWidth > 768 ? (isZenMode ? 'calc(100vh - 20px)' : 'calc(100vh - 120px)') : 'auto',
                   minHeight: 0
                 }}>
                   {/* Slot 1: NIFTY 50 Anchor */}
-                  <div className="anchor-slot" style={{ gridRow: '1 / 2', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
+                  <div className="anchor-slot" style={{ gridRow: '1 / 2', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
                     <CanvasTradingChart
                       symbol="NIFTY 50"
                       initialInterval={maximizedChart.tf}
@@ -422,11 +448,12 @@ function App() {
                       themeColors={themeColors}
                       symbolPrices={symbolPrices}
                       hideMaximize={true}
+                      globalResetTrigger={globalResetTrigger}
                     />
                   </div>
 
                   {/* Slot 5: SENSEX Anchor */}
-                  <div className="anchor-slot" style={{ gridRow: '2 / 3', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
+                  <div className="anchor-slot" style={{ gridRow: '2 / 3', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
                     <CanvasTradingChart
                       symbol="SENSEX"
                       initialInterval={maximizedChart.tf}
@@ -439,11 +466,12 @@ function App() {
                       themeColors={themeColors}
                       symbolPrices={symbolPrices}
                       hideMaximize={true}
+                      globalResetTrigger={globalResetTrigger}
                     />
                   </div>
 
                   {/* Main Area: The Maximized Chart */}
-                  <div className="main-max-slot" style={{ gridRow: '1 / 3', gridColumn: '2 / 3', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 20px rgba(0,0,0,0.5)' }}>
+                  <div className="main-max-slot" style={{ gridRow: '1 / 3', gridColumn: '2 / 3', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 20px rgba(0,0,0,0.5)' }}>
                     <CanvasTradingChart
                       symbol={maximizedChart.sym}
                       initialInterval={maximizedChart.tf}
@@ -452,10 +480,12 @@ function App() {
                       onVisibilityUpdate={setVisibility}
                       onMaximize={() => setMaximizedChart(null)}
                       onIntervalChange={(newTf) => setMaximizedChart(p => ({ ...p, tf: newTf }))}
+                      globalResetTrigger={globalResetTrigger}
                       isMaximized={true}
                       onPriceUpdate={handlePriceUpdate}
                       themeColors={themeColors}
                       symbolPrices={symbolPrices}
+                      onDelete={fetchAll}
                     />
                   </div>
                 </div>
@@ -469,12 +499,14 @@ function App() {
                         isGrid={true}
                         externalVisibility={visibility}
                         onVisibilityUpdate={setVisibility}
+                        globalResetTrigger={globalResetTrigger}
                         onMaximize={(tf) => setMaximizedChart({ sym: slot.sym, tf })}
                         isMaximized={false}
                         onPriceUpdate={handlePriceUpdate}
                         themeColors={themeColors}
                         symbolPrices={symbolPrices}
                         isHighlighted={highlightedSymbol === slot.sym}
+                        onDelete={fetchAll}
                       />
                     </div>
                   ))}

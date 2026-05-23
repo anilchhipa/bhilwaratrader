@@ -14,13 +14,15 @@ public class MarketSessionManager {
     private final HistoricalDataService historicalDataService;
     private final TokenManager tokenManager;
 
+    private final com.algo.data.ZerodhaClient zerodhaClient;
     private boolean initialized = false;
 
     public MarketSessionManager(Engine engine, HistoricalDataService historicalDataService,
-            TokenManager tokenManager) {
+            TokenManager tokenManager, com.algo.data.ZerodhaClient zerodhaClient) {
         this.engine = engine;
         this.historicalDataService = historicalDataService;
         this.tokenManager = tokenManager;
+        this.zerodhaClient = zerodhaClient;
     }
 
     /**
@@ -47,6 +49,11 @@ public class MarketSessionManager {
     }
 
     private void handleInitialization() {
+        if (zerodhaClient != null && !zerodhaClient.isLoggedIn()) {
+            System.out.println("MarketSessionManager: Zerodha not logged in. Skipping initialization for now...");
+            return;
+        }
+
         System.out.println("MarketSessionManager: Starting initialization/sync logic...");
         for (String symbol : tokenManager.getAllSymbols()) {
             String token = tokenManager.getToken(symbol);

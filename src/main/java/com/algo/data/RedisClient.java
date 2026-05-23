@@ -25,6 +25,55 @@ public class RedisClient {
     }
 
     /**
+     * Pushes multiple timeframe updates to Redis in a single network pipeline.
+     * Dramatically reduces round-trip latency.
+     */
+    public void pushStatePipelined(String symbol, java.util.Set<String> intervals,
+            java.util.Map<String, com.algo.core.Candle> currentCandles,
+            java.util.Map<String, java.util.Map<String, Double>> indicatorValues) {
+        if (jedisPool == null)
+            return;
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            redis.clients.jedis.Pipeline p = jedis.pipelined();
+            for (String interval : intervals) {
+                com.algo.core.Candle candle = currentCandles.get(interval);
+                if (candle == null)
+                    continue;
+
+                String ohlcKey = symbol + ":" + interval + ":OHLC";
+                String indKey = symbol + ":" + interval + ":INDICATORS";
+
+                // OHLC Update
+                java.util.Map<String, String> ohlcMap = new java.util.HashMap<>();
+                ohlcMap.put("o", String.valueOf(candle.getOpen()));
+                ohlcMap.put("h", String.valueOf(candle.getHigh()));
+                ohlcMap.put("l", String.valueOf(candle.getLow()));
+                ohlcMap.put("c", String.valueOf(candle.getClose()));
+                ohlcMap.put("a", String.valueOf(candle.getAtr()));
+                ohlcMap.put("v", String.valueOf(candle.getVolume()));
+                ohlcMap.put("t", String.valueOf(
+                        candle.getTimestamp().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()));
+                p.hmset(ohlcKey, ohlcMap);
+
+                // Indicators Update
+                java.util.Map<String, Double> indicators = indicatorValues.get(interval);
+                if (indicators != null) {
+                    java.util.Map<String, String> indMap = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<String, Double> entry : indicators.entrySet()) {
+                        indMap.put(entry.getKey(), String.valueOf(entry.getValue()));
+                    }
+                    if (!indMap.isEmpty())
+                        p.hmset(indKey, indMap);
+                }
+            }
+            p.sync();
+        } catch (Exception e) {
+            System.err.println("Redis Pipelining Error: " + e.getMessage());
+        }
+    }
+
+    /**
      * Pushes the latest state of a symbol to Redis.
      */
     public void pushState(String symbol, String interval, JSONObject ohlc, JSONObject indicators) {
@@ -105,17 +154,22 @@ public class RedisClient {
     }
 
     public String get(String key) {
-        if (jedisPool == null) return null;
+        if (jedisPool == null)
+            return null;
         try (Jedis jedis = jedisPool.getResource()) {
             return jedis.get(key);
-        } catch (Exception e) { return null; }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public void setEx(String key, int seconds, String value) {
-        if (jedisPool == null) return;
+        if (jedisPool == null)
+            return;
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.setex(key, seconds, value);
-        } catch (Exception e) {}
+        } catch (Exception e) {
+        }
     }
 
     public void close() {
