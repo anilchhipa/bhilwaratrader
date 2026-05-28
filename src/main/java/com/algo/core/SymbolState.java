@@ -17,11 +17,6 @@ public class SymbolState {
     private final String[] timeframes = { "1min", "3min", "5min", "15min", "2hour" };
     private final IndicatorConfig indicatorConfig;
 
-    // Renko State
-    private final java.util.List<RenkoBrick> renkoBricks = java.util.Collections
-            .synchronizedList(new java.util.ArrayList<>());
-    private double renkoPivot = 0;
-
     // Timeframe -> List of historical Candles (The "Hot Buffer")
     private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
     private static final int MAX_HOT_CANDLES = 1000;
@@ -45,6 +40,10 @@ public class SymbolState {
 
     // Timeframe -> Last Trend Flip Time
     private final Map<String, java.time.LocalDateTime> lastFlipTimes = new ConcurrentHashMap<>();
+
+    // Cache for interval start times to avoid new LocalDateTime allocations per
+    // tick
+    private final Map<String, java.time.LocalDateTime> nextExpectedIntervals = new ConcurrentHashMap<>();
 
     // Timeframe -> Last Trend confirmed at candle close
     private final Map<String, Integer> confirmedTrendMap1 = new ConcurrentHashMap<>();
@@ -129,17 +128,18 @@ public class SymbolState {
 
             int startIndex = historicalCandles.indexOf(bestPrimal) + 1;
             for (int i = startIndex; i < historicalCandles.size(); i++) {
+                Candle c = historicalCandles.get(i);
                 Candle prev = i > 0 ? historicalCandles.get(i - 1) : null;
-                strategy.onNewCandle(prev, historicalCandles.get(i), 0); // 0 = Neutral/No Filter during initial history
-                                                                         // seed
+                strategy.onNewCandle(prev, c, 0);
             }
         } else {
             // Fallback: Slow warm-up by re-calculating everything
             logger.info("SymbolState [{} {}]: No indicator baseline in DB. Re-calculating from {} candles.", symbol, tf,
                     historicalCandles.size());
             for (int i = 0; i < historicalCandles.size(); i++) {
+                Candle c = historicalCandles.get(i);
                 Candle prev = i > 0 ? historicalCandles.get(i - 1) : null;
-                strategy.onNewCandle(prev, historicalCandles.get(i), 0);
+                strategy.onNewCandle(prev, c, 0);
             }
         }
 
@@ -188,7 +188,7 @@ public class SymbolState {
 
     /** Returns true if any state changed (price/indicator updated). */
     private boolean updateTimeframe(String tf, double price, double quantity, java.time.LocalDateTime time) {
-        java.time.LocalDateTime start = getIntervalStartTime(time, tf);
+        java.time.LocalDateTime start = getIntervalStartTimeCached(time, tf);
         Candle current = currentCandles.get(tf);
 
         if (current == null || start.isAfter(current.getTimestamp())) {
@@ -226,45 +226,43 @@ public class SymbolState {
             int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
             strategies.get(tf).onNewCandle(current, newCandle, macroBias);
 
-            // Confirmed Trend Flip Detection (only on candle close)
-            // USER REQUEST: Only notify for 3min and 5min timeframes.
-            boolean shouldNotify = tf.equals("3min") || tf.equals("5min");
+            if (current != null) {
+                // Confirmed Trend Flip Detection (only on candle close)
+                boolean shouldNotify = tf.equals("3min") || tf.equals("5min");
 
-            Integer trendAtClose1 = current.getStTrend();
-            Integer lastConfirmed1 = confirmedTrendMap1.get(tf);
-            if (trendAtClose1 != null && lastConfirmed1 != null && !trendAtClose1.equals(lastConfirmed1)) {
-                lastFlipTimes.put(tf, current.getTimestamp());
+                Integer trendAtClose1 = current.getStTrend();
+                Integer lastConfirmed1 = confirmedTrendMap1.get(tf);
+                if (trendAtClose1 != null && lastConfirmed1 != null && !trendAtClose1.equals(lastConfirmed1)) {
+                    lastFlipTimes.put(tf, current.getTimestamp());
 
-                // ATR Volatility Filter: Only notify if market is moving enough to beat theta
-                // decay
-                double atr = current.getAtr() != null ? current.getAtr() : 0;
-                boolean isVolatile = atr >= indicatorConfig.getAtrThreshold();
+                    double atr = current.getAtr() != null ? current.getAtr() : 0;
+                    boolean isVolatile = atr >= indicatorConfig.getAtrThreshold();
 
-                if (onTrendFlip != null && shouldNotify) {
-                    if (isVolatile) {
-                        onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
-                    } else {
-                        logger.info(
-                                "SymbolState [{} {}]: Trend flipped but ATR ({}) below threshold ({}). Alert suppressed.",
-                                symbol, tf, atr, indicatorConfig.getAtrThreshold());
+                    if (onTrendFlip != null && shouldNotify) {
+                        if (isVolatile) {
+                            onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
+                        } else {
+                            logger.info(
+                                    "SymbolState [{} {}]: Trend flipped but ATR ({}) below threshold ({}). Alert suppressed.",
+                                    symbol, tf, atr, indicatorConfig.getAtrThreshold());
+                        }
                     }
-
                 }
-            }
-            if (trendAtClose1 != null) {
-                confirmedTrendMap1.put(tf, trendAtClose1);
-            }
-
-            Integer trendAtClose2 = current.getStTrend2();
-            Integer lastConfirmed2 = confirmedTrendMap2.get(tf);
-            if (trendAtClose2 != null && lastConfirmed2 != null && !trendAtClose2.equals(lastConfirmed2)) {
-                double atr = current.getAtr() != null ? current.getAtr() : 0;
-                if (onTrendFlip != null && shouldNotify && atr >= indicatorConfig.getAtrThreshold()) {
-                    onTrendFlip.onFlip(this.symbol, tf, trendAtClose2, true);
+                if (trendAtClose1 != null) {
+                    confirmedTrendMap1.put(tf, trendAtClose1);
                 }
-            }
-            if (trendAtClose2 != null) {
-                confirmedTrendMap2.put(tf, trendAtClose2);
+
+                Integer trendAtClose2 = current.getStTrend2();
+                Integer lastConfirmed2 = confirmedTrendMap2.get(tf);
+                if (trendAtClose2 != null && lastConfirmed2 != null && !trendAtClose2.equals(lastConfirmed2)) {
+                    double atr = current.getAtr() != null ? current.getAtr() : 0;
+                    if (onTrendFlip != null && shouldNotify && atr >= indicatorConfig.getAtrThreshold()) {
+                        onTrendFlip.onFlip(this.symbol, tf, trendAtClose2, true);
+                    }
+                }
+                if (trendAtClose2 != null) {
+                    confirmedTrendMap2.put(tf, trendAtClose2);
+                }
             }
 
             current = newCandle;
@@ -288,51 +286,14 @@ public class SymbolState {
             current.setHigh(Math.max(current.getHigh(), price));
             current.setLow(Math.min(current.getLow(), price));
             current.setClose(price);
-
             current.setVolume(current.getVolume() + quantity);
 
+            // LIVE UPDATE: Update indicators for the current candle on every price change
             strategies.get(tf).updateLastCandle(current);
-
-            if ("2hour".equals(tf)) {
-                updateRenkoBricks(price, time);
-            }
         }
 
         updateIndicatorMap(tf, current);
         return true;
-    }
-
-    private synchronized void updateRenkoBricks(double price, java.time.LocalDateTime time) {
-        double brickSize = indicatorConfig.getRenkoBrickSize();
-        if (brickSize <= 0)
-            return;
-
-        if (renkoPivot == 0) {
-            renkoPivot = price;
-            return;
-        }
-
-        while (price >= renkoPivot + brickSize) {
-            double newOpen = renkoPivot;
-            double newClose = renkoPivot + brickSize;
-            renkoBricks.add(new RenkoBrick(time, time, newOpen, newClose));
-            renkoPivot = newClose;
-        }
-
-        while (price <= renkoPivot - brickSize) {
-            double newOpen = renkoPivot;
-            double newClose = renkoPivot - brickSize;
-            renkoBricks.add(new RenkoBrick(time, time, newOpen, newClose));
-            renkoPivot = newClose;
-        }
-
-        if (renkoBricks.size() > 500) {
-            renkoBricks.subList(0, 100).clear();
-        }
-    }
-
-    public java.util.List<RenkoBrick> getRenkoBricks() {
-        return new java.util.ArrayList<>(renkoBricks);
     }
 
     /**
@@ -368,48 +329,85 @@ public class SymbolState {
         safePut(values, "stMa", current.getStMa());
         safePut(values, "stUp", current.getStUp());
         safePut(values, "stDn", current.getStDn());
-        safePut(values, "stTrend", (double) (current.getStTrend() != null ? current.getStTrend() : 0));
+        safePut(values, "stTrend", current.getStTrend());
 
         // SuperTrend 2 (ST100)
         safePut(values, "stMa2", current.getStMa2());
         safePut(values, "stDn2", current.getStDn2());
-        safePut(values, "stTrend2", (double) (current.getStTrend2() != null ? current.getStTrend2() : 0));
+        safePut(values, "stTrend2", current.getStTrend2());
 
         // ATR Volatility
         safePut(values, "atr", current.getAtr());
 
-        // Signal System
-        if (current.getSignal() != null) {
-            values.put("signal", (double) current.getSignal());
-        }
-        safePut(values, "tradeScore", current.getTradeScore());
-        safePut(values, "er", current.getEr());
+        // Signal System REMOVED (Only EMAs and SuperTrends needed)
     }
 
+    /**
+     * Primitive-aware safePut to minimize map mutations and object retention.
+     */
     private void safePut(Map<String, Double> map, String key, Double value) {
-        if (value != null) {
+        if (value == null)
+            return;
+        Double existing = map.get(key);
+        // Only put if the value is different (avoids ConcurrentHashMap internal
+        // locking/volatile writes)
+        if (existing == null || !existing.equals(value)) {
             map.put(key, value);
         }
     }
 
-    private java.time.LocalDateTime getIntervalStartTime(java.time.LocalDateTime time, String interval) {
-        int minutes = 1;
+    private void safePut(Map<String, Double> map, String key, Integer value) {
+        if (value == null)
+            return;
+        double dv = value.doubleValue();
+        Double existing = map.get(key);
+        if (existing == null || existing != dv) {
+            map.put(key, dv);
+        }
+    }
+
+    private void safePut(Map<String, Double> map, String key, double value) {
+        Double existing = map.get(key);
+        if (existing == null || existing != value) {
+            map.put(key, value);
+        }
+    }
+
+    /**
+     * Optimized interval start time calculation with caching to avoid heavy
+     * LocalDateTime allocations.
+     */
+    private java.time.LocalDateTime getIntervalStartTimeCached(java.time.LocalDateTime time, String interval) {
+        java.time.LocalDateTime cachedNext = nextExpectedIntervals.get(interval);
+        if (cachedNext != null && time.isBefore(cachedNext)) {
+            // Subtracting the interval is cheaper than re-calculating from scratch
+            int mins = getMinutesForInterval(interval);
+            return cachedNext.minusMinutes(mins);
+        }
+
+        java.time.LocalDateTime start = getIntervalStartTime(time, interval);
+        int mins = getMinutesForInterval(interval);
+        nextExpectedIntervals.put(interval, start.plusMinutes(mins));
+        return start;
+    }
+
+    private int getMinutesForInterval(String interval) {
         switch (interval) {
             case "1min":
-                minutes = 1;
-                break;
+                return 1;
             case "3min":
-                minutes = 3;
-                break;
+                return 3;
             case "5min":
-                minutes = 5;
-                break;
+                return 5;
             case "15min":
-                minutes = 15;
-                break;
+                return 15;
             default:
-                minutes = 1;
+                return 1;
         }
+    }
+
+    private java.time.LocalDateTime getIntervalStartTime(java.time.LocalDateTime time, String interval) {
+        int minutes = getMinutesForInterval(interval);
         int currentMinute = time.getMinute() + (time.getHour() * 60);
         int candleStartTotalMinutes = (currentMinute / minutes) * minutes;
 

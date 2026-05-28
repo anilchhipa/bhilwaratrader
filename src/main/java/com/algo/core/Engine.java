@@ -207,9 +207,8 @@ public class Engine {
             for (String interval : intervals) {
                 Candle candle = state.getCurrentCandles().get(interval);
                 Map<String, Double> indicators = state.getIndicatorValues().get(interval);
-                List<RenkoBrick> renko = state.getRenkoBricks();
                 if (candle != null && indicators != null) {
-                    broadcaster.broadcastUpdateOptimized(state.getSymbol(), interval, candle, indicators, renko);
+                    broadcaster.broadcastUpdateOptimized(state.getSymbol(), interval, candle, indicators);
                 }
             }
         }

@@ -30,11 +30,6 @@ public class Candle {
 
     private Double volume;
 
-    // --- Signal & Score fields ---
-    private Integer signal; // +1 = BUY, -1 = SELL, 0 = NO TRADE
-    private Double tradeScore; // Bayesian composite score (0.0 – 8.0)
-    private Double er; // Efficiency Ratio (0.0 – 1.0)
-
     public Candle(double open, double high, double low, double close, double volume, LocalDateTime timestamp) {
         this.open = open;
         this.high = high;
@@ -213,27 +208,4 @@ public class Candle {
         this.atr = atr;
     }
 
-    public Integer getSignal() {
-        return signal;
-    }
-
-    public void setSignal(Integer signal) {
-        this.signal = signal;
-    }
-
-    public Double getTradeScore() {
-        return tradeScore;
-    }
-
-    public void setTradeScore(Double tradeScore) {
-        this.tradeScore = tradeScore;
-    }
-
-    public Double getEr() {
-        return er;
-    }
-
-    public void setEr(Double er) {
-        this.er = er;
-    }
 }

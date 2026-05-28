@@ -48,18 +48,8 @@ export const LiveFeedProvider = ({ children }) => {
                         ema15_15_15_15: c.ema15Plus15Plus15Plus15,
                         ema15_15_15_15_30: c.ema15Plus15Plus15Plus15Plus30,
                         stMa: c.stMa, stUp: c.stUp, stDn: c.stDn, stTrend: c.stTrend,
-                        stMa2: c.stMa2, stUp2: c.stUp2, stDn2: c.stDn2, stTrend2: c.stTrend2,
-                        whaleSignal: c.whaleSignal,
-                        signal: c.signal,
-                        tradeScore: c.tradeScore,
-                        er: c.er
-                    },
-                    renko: decoded.renko ? decoded.renko.map(rb => ({
-                        t: Number(rb.t),
-                        et: Number(rb.et),
-                        o: rb.o,
-                        c: rb.c
-                    })) : []
+                        stMa2: c.stMa2, stUp2: c.stUp2, stDn2: c.stDn2, stTrend2: c.stTrend2
+                    }
                 };
             } catch (e) {
                 console.warn("LiveFeed: Proto decode failed", e);

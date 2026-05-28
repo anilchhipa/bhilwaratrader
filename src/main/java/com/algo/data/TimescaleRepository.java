@@ -105,9 +105,6 @@ public class TimescaleRepository {
                         "st_dn2 DOUBLE PRECISION, " +
                         "st_trend2 INTEGER, " +
                         "atr DOUBLE PRECISION, " +
-                        "signal INTEGER, " +
-                        "trade_score DOUBLE PRECISION, " +
-                        "er DOUBLE PRECISION, " +
                         "PRIMARY KEY (time, symbol, interval)" +
                         ")");
 
@@ -168,8 +165,8 @@ public class TimescaleRepository {
     private int executeSave(List<Candle> candles, String symbol, String interval) {
         String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, signal, trade_score, er) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
                 "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
@@ -178,9 +175,7 @@ public class TimescaleRepository {
                 +
                 "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, "
                 +
-                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr, "
-                +
-                "signal = EXCLUDED.signal, trade_score = EXCLUDED.trade_score, er = EXCLUDED.er";
+                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr";
 
         int savedCount = 0;
         Connection conn = null;
@@ -217,9 +212,6 @@ public class TimescaleRepository {
                     setDoubleOrNull(pstmt, 21, candle.getStDn2());
                     setIntegerOrNull(pstmt, 22, candle.getStTrend2());
                     setDoubleOrNull(pstmt, 23, candle.getAtr());
-                    setIntegerOrNull(pstmt, 24, candle.getSignal());
-                    setDoubleOrNull(pstmt, 25, candle.getTradeScore());
-                    setDoubleOrNull(pstmt, 26, candle.getEr());
 
                     pstmt.addBatch();
                 }
@@ -246,7 +238,7 @@ public class TimescaleRepository {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, signal, trade_score, er " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr " +
                 "FROM candles " +
                 "WHERE symbol = ? AND interval = ? " +
                 "ORDER BY time DESC " +
@@ -288,9 +280,6 @@ public class TimescaleRepository {
                     candle.setStDn2(getDoubleOrNull(rs, "st_dn2"));
                     candle.setStTrend2(getIntegerOrNull(rs, "st_trend2"));
                     candle.setAtr(getDoubleOrNull(rs, "atr"));
-                    candle.setSignal(getIntegerOrNull(rs, "signal"));
-                    candle.setTradeScore(getDoubleOrNull(rs, "trade_score"));
-                    candle.setEr(getDoubleOrNull(rs, "er"));
 
                     candles.add(candle);
                 }

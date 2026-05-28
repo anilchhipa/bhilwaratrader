@@ -48,7 +48,6 @@ public class Strategy {
     private final int c3; // EMA cascade 3
     private final int c4; // EMA cascade 4
     private final int c5; // EMA cascade 5
-    private int currentMacroBias = 0; // 1 = Bullish Macro, -1 = Bearish Macro, 0 = Neutral/Invalid
 
     public Strategy(IndicatorConfig config) {
         this.p1 = config.getEmaPeriod1();
@@ -102,7 +101,6 @@ public class Strategy {
     }
 
     public synchronized void onNewCandle(Candle finishedCandle, Candle newCandle, int macroBias) {
-        this.currentMacroBias = macroBias;
 
         // 2. Commit the PREVIOUS candle's final live values to the stable baseline
         updateSnapshots();
@@ -143,7 +141,6 @@ public class Strategy {
     }
 
     public void populateCandleIndicators(Candle candle) {
-        // We calculate score even if we don't know the symbol yet
         candle.setEma15(ema15);
         candle.setEma15_5(ema15_5);
         candle.setEma15_15(ema15_15);
@@ -170,21 +167,6 @@ public class Strategy {
                 candle.setStDn2(stma2.getLiveDn());
             candle.setStTrend2(stma2.getLiveTrend());
         }
-
-        // --- Core Trend Score ---
-        double score = getTradeScore(candle.getClose());
-
-        // 3. Macro Trend Alignment (The "Big Brother" Rule)
-        int directionalSignal = getDirectionalSignal();
-        boolean macroAligned = (currentMacroBias == 0 || currentMacroBias == 999
-                || directionalSignal == currentMacroBias);
-
-        // Simple filtering: ensure signal is strong and aligned with Macro trend
-        // (threshold 5.0).
-        int signal = (score >= 5.0 && macroAligned) ? directionalSignal : 0;
-
-        candle.setTradeScore(score);
-        candle.setSignal(signal);
     }
 
     /**
@@ -194,61 +176,6 @@ public class Strategy {
         if (stma == null)
             return 0;
         return stma.getTrend();
-    }
-
-    // Deleted ER and Z-Score logic.
-
-    // =========================================================================
-    // BAYESIAN TRADE SCORE
-    // =========================================================================
-
-    /**
-     * Composite weighted score focusing purely on Trend Confluence.
-     *
-     * +2.0 Both SuperTrends agree on the same direction (Mandatory)
-     * +3.0 EMA Cloud aligned with ST direction
-     */
-    public double getTradeScore(double currentPrice) {
-        double score = 0.0;
-
-        int st1Trend = (stma != null) ? stma.getLiveTrend() : 0;
-        int st2Trend = (stma2 != null) ? stma2.getLiveTrend() : 0;
-
-        // ── Condition 1: Both SuperTrends must agree ─────────────────────────
-        if (st1Trend != 0 && st1Trend == st2Trend) {
-            score += 2.0;
-        } else {
-            return 0.0; // Hard exit: No trade if trends conflict
-        }
-
-        int direction = st1Trend;
-
-        // ── Condition 2: EMA Cloud alignment (+3.0) ──────────────────────────
-        // Combined with SuperTrend, this ensures a strong trend entry.
-        boolean emaCloudBullish = ema15_5 > ema15_15_15_15_30;
-        boolean emaCloudBearish = ema15_5 < ema15_15_15_15_30;
-
-        if ((direction == 1 && emaCloudBullish) ||
-                (direction == -1 && emaCloudBearish)) {
-            score += 3.0; // Heavily weighted for cloud confirmation
-        }
-
-        return score;
-    }
-
-    /**
-     * Returns the raw directional signal from aligned SuperTrends.
-     * Only call this AFTER confirming tradeScore >= 5.0.
-     * +1 = BUY direction
-     * -1 = SELL direction
-     * 0 = No clear direction
-     */
-    public int getDirectionalSignal() {
-        int st1 = (stma != null) ? stma.getLiveTrend() : 0;
-        int st2 = (stma2 != null) ? stma2.getLiveTrend() : 0;
-        if (st1 == st2 && st1 != 0)
-            return st1;
-        return 0;
     }
 
     private double calculateEMA(double value, double currentEMA, int period) {
@@ -282,9 +209,10 @@ public class Strategy {
             updateLastInHistory(ema15_15_15History, ema15_15_15);
             updateLastInHistory(ema15_15_15_15History, ema15_15_15_15);
             updateLastInHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
-            // Re-publish snapshots with updated live values
-            publishHistorySnapshots();
 
+            // OPTIMIZATION: Do NOT publish history snapshots on every live tick.
+            // History snapshots (full array copies) are only needed when a candle closes.
+            // Live point updates are handled via the scalar getters (getEma15, etc).
         } else {
             ema15 = calculateEMA(price, ema15, p1);
             ema15_5 = calculateEMA(ema15, ema15_5, c1);

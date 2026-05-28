@@ -40,7 +40,7 @@ public class LiveUpdateBroadcaster {
      * allocations.
      */
     public void broadcastUpdateOptimized(String symbol, String interval, com.algo.core.Candle candle,
-            java.util.Map<String, Double> indicators, java.util.List<com.algo.core.RenkoBrick> renko) {
+            java.util.Map<String, Double> indicators) {
         String key = symbol + "_" + interval;
         long now = System.currentTimeMillis();
         long currentCandleTime = candle.getTimestamp().atZone(java.time.ZoneId.systemDefault()).toInstant()
@@ -76,9 +76,6 @@ public class LiveUpdateBroadcaster {
                     .setStUp2(indicators.getOrDefault("stUp2", 0.0))
                     .setStDn2(indicators.getOrDefault("stDn2", 0.0))
                     .setStTrend2(indicators.getOrDefault("stTrend2", 0.0).intValue())
-                    .setSignal(indicators.getOrDefault("signal", 0.0).intValue())
-                    .setTradeScore(indicators.getOrDefault("tradeScore", 0.0))
-                    .setEr(indicators.getOrDefault("er", 0.0))
                     .build();
 
             com.algo.proto.ChartProtos.CandleUpdate.Builder binaryUpdate = com.algo.proto.ChartProtos.CandleUpdate
@@ -86,17 +83,6 @@ public class LiveUpdateBroadcaster {
                     .setSymbol(symbol)
                     .setTimeframe(interval)
                     .setCandle(data);
-
-            if (renko != null && !renko.isEmpty()) {
-                for (com.algo.core.RenkoBrick rb : renko) {
-                    binaryUpdate.addRenko(com.algo.proto.ChartProtos.RenkoBrick.newBuilder()
-                            .setT(rb.getStartTime())
-                            .setEt(rb.getEndTime())
-                            .setO(rb.getOpen())
-                            .setC(rb.getClose())
-                            .build());
-                }
-            }
 
             org.springframework.messaging.simp.SimpMessageHeaderAccessor headerAccessor = org.springframework.messaging.simp.SimpMessageHeaderAccessor
                     .create();

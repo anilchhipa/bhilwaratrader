@@ -21,7 +21,6 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const [loading, setLoading] = useState(true);
     // Canonical live data lives in a ref — avoids React re-renders on every tick
     const liveDataRef = useRef([]);
-    const renkoBricksRef = useRef([]);
     // Pending RAF handle for live-tick renders
     const pendingRafRef = useRef(null);
 
@@ -253,39 +252,6 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             ctx.stroke();
         });
 
-        // RENKO BRICKS (Macro Trend Overlay)
-        if (renkoBricksRef.current && renkoBricksRef.current.length > 0) {
-            const bricks = renkoBricksRef.current;
-            ctx.save();
-            ctx.setLineDash([2, 4]);
-            ctx.lineWidth = 0.7;
-
-            const findX = (ts) => {
-                // Find approximate index in dData
-                let low = 0, high = dData.length - 1;
-                while (low <= high) {
-                    let mid = Math.floor((low + high) / 2);
-                    if (dData[mid].timestamp < ts) low = mid + 1;
-                    else if (dData[mid].timestamp > ts) high = mid - 1;
-                    else { low = mid; break; }
-                }
-                return math.i2x(low);
-            };
-
-            bricks.forEach(rb => {
-                const x1 = findX(rb.t);
-                const x2 = findX(rb.et || Date.now()); // et might be current time for active brick
-                const y1 = math.p2y(rb.o);
-                const y2 = math.p2y(rb.c);
-
-                if (x2 < 0 || x1 > math.cw) return;
-
-                const isUp = rb.c > rb.o;
-                ctx.strokeStyle = isUp ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)';
-                ctx.strokeRect(x1, Math.min(y1, y2), Math.max(2, x2 - x1), Math.abs(y2 - y1));
-            });
-            ctx.restore();
-        }
 
         // CANDLES
         math.slice.forEach((c, i) => {
@@ -541,6 +507,8 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
 
         // Normal Scanner mode: data will arrive via WebSocket snapshot (handled by useLiveFeed callback)
         setLoading(true);
+
+
     }, [symbol, interval, preloadedData, isMaximized]);
     useEffect(() => {
         if (globalResetTrigger > 0 && globalResetTrigger !== lastResetSignal.current) {
@@ -570,9 +538,6 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             arr.push(f);
         }
 
-        if (u.renko && u.renko.length > 0) {
-            renkoBricksRef.current = u.renko;
-        }
 
         // Schedule a canvas repaint if one isn't already pending — 60fps max
         if (!pendingRafRef.current) {
@@ -582,7 +547,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             });
         }
     }, [isReplayMode, render]), snapshotCallback);
-    useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 250); return () => clearInterval(t); }, [isReplaying]);
+    useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 1000); return () => clearInterval(t); }, [isReplaying]);
     useEffect(() => {
         render();
         renderOverlay();
