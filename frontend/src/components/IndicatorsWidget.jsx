@@ -17,7 +17,8 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
             title: "Analysis Helpers",
             items: [
                 { key: 'CLOUD', label: 'Supertrend Cloud (ST42)' },
-                { key: 'CLOUD2', label: 'Supertrend Cloud (ST100)' }
+                { key: 'CLOUD2', label: 'Supertrend Cloud (ST100)' },
+                { key: 'ARC_VWAP', label: 'Arc VWAP Supertrend' },
             ]
         },
         {

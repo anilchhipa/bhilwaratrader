@@ -5,14 +5,17 @@ import { formatSymbol } from '../helpers/formatSymbol';
 import { useLiveFeed } from '../context/LiveFeedContext';
 
 const COLORS = {
-    bg: '#020617', // Deep Obsidian
-    bull: '#10b981', // Emerald
-    bear: '#f43f5e', // Rose
+    bg: '#020617',
+    bull: '#10b981',
+    bear: '#f43f5e',
     text: '#f8fafc',
     grid: 'rgba(30, 41, 59, 0.4)',
     crosshair: 'rgba(255, 255, 255, 0.3)',
     emas: ['#ffffff', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#06b6d4'],
-    stBull: 'rgba(0, 110, 255, 0.45)', stBear: 'rgba(255, 35, 35, 0.45)', st2: 'rgba(168, 85, 247, 0.15)'
+    stBull: 'rgba(0, 110, 255, 0.45)', stBear: 'rgba(255, 35, 35, 0.45)', st2: 'rgba(168, 85, 247, 0.15)',
+    arcBull: '#1ac200',   // green arc (bullish)
+    arcBear: '#ff4040',   // red arc (bearish)
+    vwap: 'rgba(251, 191, 36, 0.55)'  // session VWAP line
 };
 
 const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGrid = false, isMaximized = false, onMaximize, onPriceUpdate, externalVisibility, onVisibilityUpdate, onIntervalChange, themeColors, symbolPrices, hideMaximize = false, preloadedData, isHighlighted = false, globalResetTrigger, onDelete }) => {
@@ -23,11 +26,19 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     const liveDataRef = useRef([]);
     // Pending RAF handle for live-tick renders
     const pendingRafRef = useRef(null);
+    // Always-current render refs — prevents stale closures in RAF callbacks
+    const renderRef = useRef(null);
+    const renderOverlayRef = useRef(null);
+    // Throttle RAF for overlay redraws on pointer move
+    const overlayRafRef = useRef(null);
+    // BroadcastChannel ref for writing zoom sync messages
+    const bcRef = useRef(null);
 
     useEffect(() => {
         setTimeframe(initialInterval);
     }, [initialInterval]);
-    const vis = externalVisibility || { EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true, EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true };
+    const vis = externalVisibility || { EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true, EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true, ARC_VWAP: true };
+
 
     const [isReplayMode, setIsReplayMode] = useState(false);
     const [replayIndex, setReplayIndex] = useState(-1);
@@ -115,6 +126,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
 
     useEffect(() => {
         const bc = new BroadcastChannel('grid_chart_sync');
+        bcRef.current = bc;
         bc.onmessage = (e) => {
             if (e.data.type === 'SYNC_ZOOM') {
                 setVisibleBars(e.data.count);
@@ -122,7 +134,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             }
             if (e.data.type === 'SYNC_LOG_SCALE') setIsLog(e.data.enabled);
         };
-        return () => bc.close();
+        return () => { bc.close(); bcRef.current = null; };
     }, []);
 
     const containerRef = useRef(null);
@@ -252,6 +264,115 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             ctx.stroke();
         });
 
+        // ── ARC VWAP SUPERTREND ──────────────────────────────────────────
+        if (vis.ARC_VWAP) {
+            // 1. Session VWAP line — hidden (distracting)
+            // let vwapStarted = false;
+            // ctx.save();
+            // ctx.strokeStyle = COLORS.vwap;
+            // ctx.lineWidth = 1.2;
+            // ctx.setLineDash([4, 6]);
+            // ctx.beginPath();
+            // math.slice.forEach((c, i) => {
+            //     const v = c.vwapSession;
+            //     if (v === undefined || v === null || isNaN(v) || v <= 0) return;
+            //     const x = math.i2x(math.start + i), y = math.p2y(v);
+            //     if (!vwapStarted) { ctx.moveTo(x, y); vwapStarted = true; }
+            //     else ctx.lineTo(x, y);
+            // });
+            // ctx.stroke();
+            // ctx.setLineDash([]);
+            // ctx.restore();
+
+            // 2. Arc line — color follows trend, breaks on flips
+            let lastArcTrend = null;
+            ctx.save();
+            ctx.lineWidth = 0.7;
+            let arcPath = [];
+            const flushArc = (col, path) => {
+                if (path.length < 2) return;
+                ctx.strokeStyle = col;
+                ctx.beginPath();
+                path.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+                ctx.stroke();
+            };
+            math.slice.forEach((c, i) => {
+                const av = c.arcValue;
+                if (!av || av <= 0) { flushArc(lastArcTrend ? COLORS.arcBull : COLORS.arcBear, arcPath); arcPath = []; return; }
+                const col = c.arcTrend ? COLORS.arcBull : COLORS.arcBear;
+                if (col !== (lastArcTrend ? COLORS.arcBull : COLORS.arcBear) && arcPath.length > 0) {
+                    flushArc(lastArcTrend ? COLORS.arcBull : COLORS.arcBear, arcPath);
+                    arcPath = [];
+                }
+                lastArcTrend = c.arcTrend;
+                arcPath.push([math.i2x(math.start + i), math.p2y(av)]);
+            });
+            flushArc(lastArcTrend ? COLORS.arcBull : COLORS.arcBear, arcPath);
+            ctx.restore();
+
+            // 3. Flip indicators — B/S for confirmed flips, ▲/▼ for unconfirmed (filtered) flips
+            ctx.save();
+            ctx.textAlign = 'center';
+            math.slice.forEach((c, i) => {
+                if (!c.arcValue || c.arcValue <= 0) return;
+                const prev = i > 0 ? math.slice[i - 1] : null;
+                if (!prev || !prev.arcValue) return;
+                const flipped = (c.arcTrend !== prev.arcTrend);
+                if (!flipped) return;
+                const x = math.i2x(math.start + i);
+                const arcY = math.p2y(c.arcValue);
+                
+                if (c.arcFlipConfirmed) {
+                    const badgeY = c.arcTrend ? arcY + 22 : arcY - 14;
+                    const badgeColor = c.arcTrend ? '#10b981' : '#f43f5e';
+                    const text = c.arcTrend ? 'B' : 'S';
+                    const size = 14; // Small compact diameter
+
+                    ctx.save();
+                    // Subtle Glow
+                    ctx.shadowColor = badgeColor;
+                    ctx.shadowBlur = 6;
+                    ctx.shadowOffsetX = 0;
+                    ctx.shadowOffsetY = 0;
+
+                    // Draw circular badge
+                    ctx.fillStyle = badgeColor;
+                    ctx.beginPath();
+                    ctx.arc(x, badgeY, size / 2, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Subtle border
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+
+                    // Label text
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 9px JetBrains Mono, Inter, sans-serif';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(text, x, badgeY + 0.5);
+                    ctx.restore();
+                } else {
+                    ctx.font = 'bold 18px Inter';
+                    const alpha = 0.45; // Dimmed unconfirmed flip
+                    if (c.arcTrend) {
+                        // Dimmed Bull flip triangle
+                        ctx.fillStyle = `rgba(26,194,0,${alpha})`;
+                        ctx.fillText('▲', x, arcY + 26);
+                    } else {
+                        // Dimmed Bear flip triangle
+                        ctx.fillStyle = `rgba(255,64,64,${alpha})`;
+                        ctx.fillText('▼', x, arcY - 10);
+                    }
+                }
+            });
+            ctx.restore();
+        }
+        // ── END ARC VWAP ──────────────────────────────────────────────────
+
+
+
 
         // CANDLES
         math.slice.forEach((c, i) => {
@@ -266,7 +387,9 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             const bw = Math.max(2, math.bs * 0.8);
             ctx.fillRect(x - bw / 2, Math.min(math.p2y(c.open), math.p2y(c.close)), bw, Math.max(1, Math.abs(math.p2y(c.open) - math.p2y(c.close))));
 
+
         });
+
 
         // SIGNAL MARKERS REMOVED (Bayesian System)
 
@@ -436,6 +559,18 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         ctx.restore();
     }, [getMath, dData, orderLines, symbol]);
 
+    // Keep render refs pointing to the latest functions — avoids stale closure bugs in RAFs
+    useEffect(() => { renderRef.current = render; }, [render]);
+    useEffect(() => { renderOverlayRef.current = renderOverlay; }, [renderOverlay]);
+
+    // Cancel any pending RAFs on unmount to prevent errors on detached canvases
+    useEffect(() => {
+        return () => {
+            if (pendingRafRef.current) cancelAnimationFrame(pendingRafRef.current);
+            if (overlayRafRef.current) cancelAnimationFrame(overlayRafRef.current);
+        };
+    }, []);
+
     const lastResetSignal = useRef(0);
 
     const onReset = useCallback(() => {
@@ -520,9 +655,6 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
     useLiveFeed(symbol, interval, useCallback(u => {
         if (isReplayMode) return;
 
-        // Debug: confirm signal/score data in console
-        if (Math.random() < 0.02) console.log("Bayesian Sync:", u.indicators);
-
         // Mutate the ref directly — NO setState, NO array copy, NO React re-render
         const arr = liveDataRef.current;
         const f = {
@@ -538,15 +670,16 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             arr.push(f);
         }
 
-
-        // Schedule a canvas repaint if one isn't already pending — 60fps max
+        // Schedule a canvas repaint if one isn't already pending — 60fps max.
+        // renderRef always points to the latest render closure, preventing stale captures.
         if (!pendingRafRef.current) {
             pendingRafRef.current = requestAnimationFrame(() => {
                 pendingRafRef.current = null;
-                render();
+                renderRef.current?.();
+                renderOverlayRef.current?.(); // Keep order labels in sync on every live tick
             });
         }
-    }, [isReplayMode, render]), snapshotCallback);
+    }, [isReplayMode]), snapshotCallback);
     useEffect(() => { let t; if (isReplaying) t = setInterval(() => setReplayIndex(p => p < replayDataRef.current.length - 1 ? p + 1 : (setIsReplaying(false), p)), 1000); return () => clearInterval(t); }, [isReplaying]);
     useEffect(() => {
         render();
@@ -679,7 +812,10 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             const dist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
             const ratio = pinchStartDist.current / dist;
             const newBars = Math.max(20, Math.min(800, Math.floor(pinchStartBars.current * ratio)));
-            if (newBars !== visibleBars) setVisibleBars(newBars);
+            if (newBars !== visibleBars) {
+                setVisibleBars(newBars);
+                bcRef.current?.postMessage({ type: 'SYNC_ZOOM', count: newBars }); // Sync pinch zoom across all charts
+            }
             return;
         }
 
@@ -738,10 +874,14 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
             }
         }
 
-        requestAnimationFrame(() => {
-            if (dragStart.current) render();
-            renderOverlay();
-        });
+        // Throttle overlay redraws — at most one pending RAF frame at a time
+        if (!overlayRafRef.current) {
+            overlayRafRef.current = requestAnimationFrame(() => {
+                overlayRafRef.current = null;
+                if (dragStart.current) renderRef.current?.();
+                renderOverlayRef.current?.();
+            });
+        }
     };
 
     const handleBuySell = async (type) => {
@@ -758,10 +898,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
 
             updateOrderLines(nx => [...nx, { id: tempId, price, type, qty, isPending: true }]);
 
-            const ctx = overlayCanvasRef.current.getContext('2d');
-            ctx.font = 'bold 10px Inter';
-            const w1 = ctx.measureText(`${type} ${qty} (DROP)`).width + 12;
-            setEditingQty({ id: tempId, x: 5, y: midY, qty: qty, width: w1, isModifying: false });
+            // Order label is rendered via the DOM order-lines block below — no extra state needed
 
         } catch (err) {
             showToast('error', `Funds fetch failed: ${err.message}`);
@@ -771,7 +908,14 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
 
     return (
         <div ref={containerRef} className={`trading-canvas-wrapper ${isHighlighted ? 'glow-highlight' : ''}`} style={{ width: '100%', height: '100%', position: 'relative', background: COLORS.bg, overflow: 'hidden', borderRadius: 'inherit', touchAction: 'pan-y' }}
-            onWheel={e => { e.preventDefault(); setVisibleBars(p => Math.max(20, Math.min(800, p + (e.deltaY > 0 ? 8 : -8)))); }}
+            onWheel={e => {
+                e.preventDefault();
+                setVisibleBars(p => {
+                    const next = Math.max(20, Math.min(800, p + (e.deltaY > 0 ? 8 : -8)));
+                    bcRef.current?.postMessage({ type: 'SYNC_ZOOM', count: next }); // Sync wheel zoom across all charts
+                    return next;
+                });
+            }}
             onPointerDown={handleMouseDown} onPointerMove={handleMouseMove} onPointerUp={handleMouseUp}
             onPointerCancel={(e) => { activePointers.current.clear(); pinchStartDist.current = null; dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); }}
             onPointerLeave={(e) => { activePointers.current.delete(e.pointerId); if (activePointers.current.size === 0) { dragStart.current = null; draggingOrderRef.current = null; mouseRef.current = { x: -1, y: -1 }; renderOverlay(); } }}>

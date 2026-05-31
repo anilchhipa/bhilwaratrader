@@ -28,6 +28,14 @@ public class Candle {
     private Integer stTrend2;
     private Double atr;
 
+    // Arc VWAP Supertrend
+    private Double arcValue; // smoothed arc line value
+    private Boolean arcTrend; // true = bullish, false = bearish
+    private Boolean arcFlipConfirmed; // true if flip confirmed by VWAP
+    private Double vwapSession; // daily VWAP
+    private Double vwapWeek; // weekly VWAP
+    private Double vwapMonth; // monthly VWAP
+
     private Double volume;
 
     public Candle(double open, double high, double low, double close, double volume, LocalDateTime timestamp) {
@@ -206,6 +214,54 @@ public class Candle {
 
     public void setAtr(Double atr) {
         this.atr = atr;
+    }
+
+    public Double getArcValue() {
+        return arcValue;
+    }
+
+    public void setArcValue(Double arcValue) {
+        this.arcValue = arcValue;
+    }
+
+    public Boolean getArcTrend() {
+        return arcTrend;
+    }
+
+    public void setArcTrend(Boolean arcTrend) {
+        this.arcTrend = arcTrend;
+    }
+
+    public Boolean getArcFlipConfirmed() {
+        return arcFlipConfirmed;
+    }
+
+    public void setArcFlipConfirmed(Boolean arcFlipConfirmed) {
+        this.arcFlipConfirmed = arcFlipConfirmed;
+    }
+
+    public Double getVwapSession() {
+        return vwapSession;
+    }
+
+    public void setVwapSession(Double vwapSession) {
+        this.vwapSession = vwapSession;
+    }
+
+    public Double getVwapWeek() {
+        return vwapWeek;
+    }
+
+    public void setVwapWeek(Double vwapWeek) {
+        this.vwapWeek = vwapWeek;
+    }
+
+    public Double getVwapMonth() {
+        return vwapMonth;
+    }
+
+    public void setVwapMonth(Double vwapMonth) {
+        this.vwapMonth = vwapMonth;
     }
 
 }

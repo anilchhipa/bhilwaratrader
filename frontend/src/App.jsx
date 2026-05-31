@@ -29,13 +29,21 @@ function App() {
   const [highlightedSymbol, setHighlightedSymbol] = useState(null);
   const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('scanner_grid_layout') || '2x4');
   const [isZenMode, setIsZenMode] = useState(false);
+  const isZenModeRef = useRef(false); // Ref so keydown handler never captures a stale value
 
   const [activeWidgets, setActiveWidgets] = useState({
     manage: false,
-    indicators: false
+    indicators: false,
   });
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  // Persistent BroadcastChannel singleton — avoids create/destroy on every zoom keypress
+  const broadcastRef = useRef(null);
+  useEffect(() => {
+    broadcastRef.current = new BroadcastChannel('grid_chart_sync');
+    return () => broadcastRef.current?.close();
+  }, []);
 
   // --- Harmonic Sync Logic (1, 3, 5, 15 min alignment) ---
   const [syncSeconds, setSyncSeconds] = useState(0);
@@ -73,10 +81,16 @@ function App() {
   const [visibility, setVisibility] = useState(() => {
     const defaults = {
       EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
-      EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true
+      EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true, ARC_VWAP: true
     };
     const saved = localStorage.getItem('chartVisibility');
-    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+    let finalVisibility = defaults;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      finalVisibility = { ...defaults, ...parsed };
+    }
+    console.log("Chart Audit: Indicator Visibility State ->", finalVisibility);
+    return finalVisibility;
   });
 
   const [themeColors, setThemeColors] = useState(() => {
@@ -120,7 +134,7 @@ function App() {
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30000); // 30s Poll
+    const interval = setInterval(fetchAll, 90000); // 90s — WS feed carries live data; REST is a fallback sync
     return () => clearInterval(interval);
   }, [fetchAll]);
 
@@ -207,8 +221,9 @@ function App() {
       if (e.key === 'Escape') {
         if (maximizedChart) {
           setMaximizedChart(null);
-        } else if (isZenMode) {
+        } else if (isZenModeRef.current) {
           setIsZenMode(false);
+          isZenModeRef.current = false;
         } else {
           handleGlobalReset();
         }
@@ -259,9 +274,7 @@ function App() {
           const newZoom = Math.max(20, Math.round(currentZoom * 0.8)); // zoom in (fewer bars)
           localStorage.setItem('chart_zoom_global', newZoom);
           ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
-          const bc = new BroadcastChannel('grid_chart_sync');
-          bc.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
-          bc.close();
+          broadcastRef.current?.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
           break;
         }
         case 'ArrowDown': {
@@ -269,9 +282,7 @@ function App() {
           const newZoom = Math.min(800, Math.round(currentZoom * 1.25)); // zoom out (more bars)
           localStorage.setItem('chart_zoom_global', newZoom);
           ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
-          const bc = new BroadcastChannel('grid_chart_sync');
-          bc.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
-          bc.close();
+          broadcastRef.current?.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
           break;
         }
         case '1':
@@ -299,7 +310,11 @@ function App() {
           break;
         }
         case 'z': case 'Z':
-          setIsZenMode(prev => !prev);
+          setIsZenMode(prev => {
+            const next = !prev;
+            isZenModeRef.current = next;
+            return next;
+          });
           break;
         default:
           break;

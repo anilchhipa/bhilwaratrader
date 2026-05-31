@@ -56,6 +56,19 @@ public class IndicatorConfig {
     @Value("${indicator.atr.threshold:0.15}")
     private double atrThreshold;
 
+    // --- Arc VWAP Supertrend ---
+    @Value("${indicator.arc.accelRate:0.12}")
+    private double arcAccelRate;
+
+    @Value("${indicator.arc.startMult:2.0}")
+    private double arcStartMult;
+
+    @Value("${indicator.arc.smooth:3}")
+    private int arcSmooth;
+
+    @Value("${indicator.arc.vwapBoost:1.5}")
+    private double arcVwapBoost;
+
     // --- Getters ---
 
     public int getEmaPeriod1() {
@@ -112,6 +125,22 @@ public class IndicatorConfig {
 
     public double getAtrThreshold() {
         return atrThreshold;
+    }
+
+    public double getArcAccelRate() {
+        return arcAccelRate;
+    }
+
+    public double getArcStartMult() {
+        return arcStartMult;
+    }
+
+    public int getArcSmooth() {
+        return arcSmooth;
+    }
+
+    public double getArcVwapBoost() {
+        return arcVwapBoost;
     }
 
     @Override

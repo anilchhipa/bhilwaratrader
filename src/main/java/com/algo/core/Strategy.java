@@ -40,6 +40,7 @@ public class Strategy {
 
     private com.algo.indicators.SuperTrendedMA stma;
     private com.algo.indicators.SuperTrendedMA stma2;
+    private com.algo.indicators.ArcVwapSuperTrend arcVwap;
 
     // --- Config-driven periods ---
     private final int p1; // EMA base period
@@ -67,6 +68,11 @@ public class Strategy {
                 config.getStAtrPeriod2(),
                 config.getStMultiplier2(),
                 true);
+        this.arcVwap = new com.algo.indicators.ArcVwapSuperTrend(
+                config.getArcAccelRate(),
+                config.getArcStartMult(),
+                config.getArcSmooth(),
+                config.getArcVwapBoost());
     }
 
     /**
@@ -95,9 +101,10 @@ public class Strategy {
                     candle.getLow(), candle.getClose(), candle.getAtr());
         }
         if (stma2 != null) {
-            stma2.adoptState(candle.getStMa2(), candle.getStUp2(), candle.getStDn2(), candle.getStTrend2(),
+            stma2.adoptState(candle.getStMa2(), candle.getStDn2(), candle.getStDn2(), candle.getStTrend2(),
                     candle.getLow(), candle.getClose(), candle.getAtr());
         }
+        // arcVwap has no adoptState — it cold-starts cleanly from history seed
     }
 
     public synchronized void onNewCandle(Candle finishedCandle, Candle newCandle, int macroBias) {
@@ -116,6 +123,10 @@ public class Strategy {
             stma2.commit();
             stma2.update(newCandle);
         }
+        if (arcVwap != null) {
+            arcVwap.commit();
+            arcVwap.update(newCandle);
+        }
 
         if (finishedCandle != null) {
             // Commit final states if needed
@@ -128,6 +139,16 @@ public class Strategy {
         publishHistorySnapshots();
     }
 
+    /**
+     * Warms up Arc VWAP Supertrend natively by feeding historical candles to it.
+     */
+    public synchronized void warmupArcVwap(Candle candle) {
+        if (arcVwap != null) {
+            arcVwap.commit();
+            arcVwap.update(candle);
+        }
+    }
+
     public synchronized void updateLastCandle(Candle candle) {
         // Always calculate live updates from the STABLE baseline (updateLast = true)
         // so that intra-candle volatility doesn't permanently skew the EMAs
@@ -136,6 +157,8 @@ public class Strategy {
             stma.updateLive(candle);
         if (stma2 != null)
             stma2.updateLive(candle);
+        if (arcVwap != null)
+            arcVwap.updateLive(candle);
 
         populateCandleIndicators(candle);
     }
@@ -167,6 +190,27 @@ public class Strategy {
                 candle.setStDn2(stma2.getLiveDn());
             candle.setStTrend2(stma2.getLiveTrend());
         }
+        if (arcVwap != null) {
+            // Always write VWAP values — they are valid from bar 1
+            double vs = arcVwap.getVwapSession();
+            if (!Double.isNaN(vs) && vs > 0)
+                candle.setVwapSession(vs);
+            double vw = arcVwap.getVwapWeek();
+            if (!Double.isNaN(vw) && vw > 0)
+                candle.setVwapWeek(vw);
+            double vm = arcVwap.getVwapMonth();
+            if (!Double.isNaN(vm) && vm > 0)
+                candle.setVwapMonth(vm);
+
+            // Arc line — only write when the warm-up is complete (not NaN)
+            double arcVal = arcVwap.getLiveArc();
+            if (!Double.isNaN(arcVal) && arcVal > 0) {
+                candle.setArcValue(arcVal);
+                candle.setArcTrend(arcVwap.getLiveTrend());
+                candle.setArcFlipConfirmed(arcVwap.isFlipConfirmed());
+            }
+        }
+
     }
 
     /**
@@ -318,5 +362,9 @@ public class Strategy {
 
     public synchronized com.algo.indicators.SuperTrendedMA getStma() {
         return stma;
+    }
+
+    public com.algo.indicators.ArcVwapSuperTrend getArcVwap() {
+        return arcVwap;
     }
 }

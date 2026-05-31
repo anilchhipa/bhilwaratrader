@@ -76,6 +76,12 @@ public class LiveUpdateBroadcaster {
                     .setStUp2(indicators.getOrDefault("stUp2", 0.0))
                     .setStDn2(indicators.getOrDefault("stDn2", 0.0))
                     .setStTrend2(indicators.getOrDefault("stTrend2", 0.0).intValue())
+                    .setArcValue(indicators.getOrDefault("arcValue", 0.0))
+                    .setArcTrend(indicators.getOrDefault("arcTrend", 0.0) > 0)
+                    .setArcFlipConfirmed(indicators.getOrDefault("arcFlipConfirmed", 0.0) > 0)
+                    .setVwapSession(indicators.getOrDefault("vwapSession", 0.0))
+                    .setVwapWeek(indicators.getOrDefault("vwapWeek", 0.0))
+                    .setVwapMonth(indicators.getOrDefault("vwapMonth", 0.0))
                     .build();
 
             com.algo.proto.ChartProtos.CandleUpdate.Builder binaryUpdate = com.algo.proto.ChartProtos.CandleUpdate

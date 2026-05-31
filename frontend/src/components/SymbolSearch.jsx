@@ -45,9 +45,9 @@ export default function SymbolSearch({
             return;
         }
 
-        const q = query.toUpperCase();
+        const q = query.toUpperCase().replace(/\s+/g, '');
         const filtered = symbols
-            .filter(s => s.toUpperCase().includes(q))
+            .filter(s => s.toUpperCase().replace(/\s+/g, '').includes(q))
             .slice(0, 10);
 
         setResults(filtered);

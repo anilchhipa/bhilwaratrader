@@ -14,12 +14,20 @@ import org.slf4j.LoggerFactory;
 public class SymbolState {
     private static final Logger logger = LoggerFactory.getLogger(SymbolState.class);
     private final String symbol;
-    private final String[] timeframes = { "1min", "3min", "5min", "15min", "2hour" };
+    private final String[] timeframes = { "1min", "3min", "5min", "15min" };
     private final IndicatorConfig indicatorConfig;
 
     // Timeframe -> List of historical Candles (The "Hot Buffer")
     private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
-    private static final int MAX_HOT_CANDLES = 1000;
+
+    // Per-timeframe candle limits — tuned so each timeframe holds ~5 trading days
+    // without bloating RAM for higher timeframes that need far fewer candles.
+    private static final java.util.Map<String, Integer> MAX_HOT_CANDLES = java.util.Map.of(
+        "1min",  2000,  // ~5.3 trading days  (375 candles/day)
+        "3min",  800,   // ~6.4 trading days
+        "5min",  500,   // ~6.6 trading days
+        "15min", 200    // ~8 trading days
+    );
 
     // Per-timeframe locks for fine-grained concurrency (avoids one global
     // synchronized)
@@ -41,9 +49,9 @@ public class SymbolState {
     // Timeframe -> Last Trend Flip Time
     private final Map<String, java.time.LocalDateTime> lastFlipTimes = new ConcurrentHashMap<>();
 
-    // Cache for interval start times to avoid new LocalDateTime allocations per
-    // tick
+    // Cache for interval start times to avoid new LocalDateTime allocations per tick
     private final Map<String, java.time.LocalDateTime> nextExpectedIntervals = new ConcurrentHashMap<>();
+    private final Map<String, java.time.LocalDateTime> currentIntervalStarts = new ConcurrentHashMap<>();
 
     // Timeframe -> Last Trend confirmed at candle close
     private final Map<String, Integer> confirmedTrendMap1 = new ConcurrentHashMap<>();
@@ -123,6 +131,13 @@ public class SymbolState {
             // INSTANT SYNC: Adopt the state from the DB directly.
             // This ensures a perfectly smooth line with zero "cold start" delay.
             strategy.adoptState(bestPrimal);
+
+            // Since ArcVwap doesn't have adoptState, we MUST warm it up from the very
+            // beginning of the history buffer
+            for (int i = 0; i <= historicalCandles.indexOf(bestPrimal); i++) {
+                strategy.warmupArcVwap(historicalCandles.get(i));
+            }
+
             logger.info("SymbolState [{} {}]: Primed strategy from DB baseline at {}", symbol, tf,
                     bestPrimal.getTimestamp());
 
@@ -147,6 +162,9 @@ public class SymbolState {
         Candle last = historicalCandles.get(historicalCandles.size() - 1);
         currentCandles.put(tf, last);
         lastStablePrices.put(tf, last.getClose());
+
+        currentIntervalStarts.put(tf, last.getTimestamp());
+        nextExpectedIntervals.put(tf, last.getTimestamp().plusMinutes(getMinutesForInterval(tf)));
 
         // CRITICAL: Populate the indicator map immediately so the Dashboard is ready!
         updateIndicatorMap(tf, last);
@@ -209,8 +227,9 @@ public class SymbolState {
                             buffer.set(buffer.size() - 1, current);
                         }
 
-                        if (buffer.size() > MAX_HOT_CANDLES) {
-                            buffer.subList(0, buffer.size() - MAX_HOT_CANDLES).clear();
+                        int limit = MAX_HOT_CANDLES.getOrDefault(tf, 1000);
+                        if (buffer.size() > limit) {
+                            buffer.subList(0, buffer.size() - limit).clear();
                         }
                     }
                 }
@@ -339,7 +358,28 @@ public class SymbolState {
         // ATR Volatility
         safePut(values, "atr", current.getAtr());
 
-        // Signal System REMOVED (Only EMAs and SuperTrends needed)
+        // Arc VWAP Supertrend
+        safePut(values, "arcValue", current.getArcValue());
+
+        // DEBUG AUDIT (Temporary)
+        if (symbol.equals("NIFTY 50") && tf.equals("3min")) {
+            // Basic log to verify the bridge is working
+            if (Math.random() < 0.01) {
+                logger.info("Indicator Link Audit [{} {}]: Arc={} VWAP={}",
+                        symbol, tf, current.getArcValue(), current.getVwapSession());
+            }
+        }
+
+        // Store booleans as 1.0/0.0 so they fit in the Double map
+        Boolean arcTrend = current.getArcTrend();
+        if (arcTrend != null)
+            safePut(values, "arcTrend", arcTrend ? 1.0 : 0.0);
+        Boolean arcFlip = current.getArcFlipConfirmed();
+        if (arcFlip != null)
+            safePut(values, "arcFlipConfirmed", arcFlip ? 1.0 : 0.0);
+        safePut(values, "vwapSession", current.getVwapSession());
+        safePut(values, "vwapWeek", current.getVwapWeek());
+        safePut(values, "vwapMonth", current.getVwapMonth());
     }
 
     /**
@@ -380,13 +420,12 @@ public class SymbolState {
     private java.time.LocalDateTime getIntervalStartTimeCached(java.time.LocalDateTime time, String interval) {
         java.time.LocalDateTime cachedNext = nextExpectedIntervals.get(interval);
         if (cachedNext != null && time.isBefore(cachedNext)) {
-            // Subtracting the interval is cheaper than re-calculating from scratch
-            int mins = getMinutesForInterval(interval);
-            return cachedNext.minusMinutes(mins);
+            return currentIntervalStarts.get(interval);
         }
 
         java.time.LocalDateTime start = getIntervalStartTime(time, interval);
         int mins = getMinutesForInterval(interval);
+        currentIntervalStarts.put(interval, start);
         nextExpectedIntervals.put(interval, start.plusMinutes(mins));
         return start;
     }

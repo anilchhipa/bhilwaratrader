@@ -27,10 +27,9 @@ public class HistoricalDataService {
         INTERVAL_MINUTES.put("3min", 3);
         INTERVAL_MINUTES.put("5min", 5);
         INTERVAL_MINUTES.put("15min", 15);
-        INTERVAL_MINUTES.put("2hour", 120);
     }
 
-    private static final String[] TIMEFRAMES = { "1min", "3min", "5min", "15min", "2hour" };
+    private static final String[] TIMEFRAMES = { "1min", "3min", "5min", "15min" };
 
     public HistoricalDataService(ZerodhaClient zerodhaClient, TimescaleRepository repository,
             com.algo.core.IndicatorConfig indicatorConfig) {
@@ -114,14 +113,8 @@ public class HistoricalDataService {
             LocalDateTime targetTime = MarketUtils.getTargetSyncTime();
             LocalDateTime startTime = targetTime.minusDays(days);
 
-            // For 2hour timeframe, we fetch 60min and aggregate manually
-            String effectiveInterval = timeframe.equals("2hour") ? "60minute" : zerodhaInterval;
-            List<Candle> candles = zerodhaClient.fetchHistory(token, effectiveInterval, startTime, targetTime,
+            List<Candle> candles = zerodhaClient.fetchHistory(token, zerodhaInterval, startTime, targetTime,
                     exchange);
-
-            if ("2hour".equals(timeframe) && candles != null && !candles.isEmpty()) {
-                candles = aggregateTo2Hour(candles);
-            }
 
             if (candles != null && !candles.isEmpty()) {
                 // Filter out any candles that fall outside standard market hours (e.g.
@@ -291,43 +284,8 @@ public class HistoricalDataService {
                 return "5minute";
             case "15min":
                 return "15minute";
-            case "2hour":
-                return "60minute"; // We fetch 60m and aggregate
             default:
                 return null;
         }
-    }
-
-    private List<Candle> aggregateTo2Hour(List<Candle> hourly) {
-        List<Candle> result = new ArrayList<>();
-        if (hourly == null || hourly.isEmpty())
-            return result;
-
-        Candle current = null;
-        for (Candle c : hourly) {
-            LocalDateTime t = c.getTimestamp();
-            // Start of 2-hour window (9:15, 11:15, 13:15, 15:15)
-            // Simplified: align by 120 minutes from market start 9:15
-            int totalMins = t.getHour() * 60 + t.getMinute();
-            int marketStartMins = 9 * 60 + 15;
-            int elapsed = totalMins - marketStartMins;
-            int windowIndex = elapsed / 120;
-            LocalDateTime windowStart = t.withHour(9).withMinute(15).withSecond(0).withNano(0)
-                    .plusMinutes(windowIndex * 120);
-
-            if (current == null || !current.getTimestamp().equals(windowStart)) {
-                if (current != null)
-                    result.add(current);
-                current = new Candle(c.getOpen(), c.getHigh(), c.getLow(), c.getClose(), c.getVolume(), windowStart);
-            } else {
-                current.setHigh(Math.max(current.getHigh(), c.getHigh()));
-                current.setLow(Math.min(current.getLow(), c.getLow()));
-                current.setClose(c.getClose());
-                current.setVolume(current.getVolume() + c.getVolume());
-            }
-        }
-        if (current != null)
-            result.add(current);
-        return result;
     }
 }

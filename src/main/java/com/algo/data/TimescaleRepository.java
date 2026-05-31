@@ -43,10 +43,25 @@ public class TimescaleRepository {
         if (tasks.isEmpty())
             return;
 
-        // Grouping by symbol/interval could optimize further, but batching is the main
-        // win
-        for (WriteTask task : tasks) {
-            executeSave(task.candles(), task.symbol(), task.interval());
+        Connection conn = null;
+        try {
+            conn = timescaleClient.getConnection();
+            for (WriteTask task : tasks) {
+                try {
+                    executeSaveWithConnection(conn, task.candles(), task.symbol(), task.interval());
+                } catch (SQLException e) {
+                    System.err.println("TimescaleRepository: Error batch flushing " + task.symbol() + " (" + task.interval() + "): " + e.getMessage());
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("TimescaleRepository: Error obtaining database connection for queue flush: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                }
+            }
         }
     }
 
@@ -110,11 +125,14 @@ public class TimescaleRepository {
 
                 // Migration: Add missing columns if they don't exist
                 try {
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS signal INTEGER");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS trade_score DOUBLE PRECISION");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS er DOUBLE PRECISION");
                     stmt.execute(
                             "ALTER TABLE candles ADD COLUMN IF NOT EXISTS volume DOUBLE PRECISION NOT NULL DEFAULT 0");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_value DOUBLE PRECISION");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_trend BOOLEAN");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_flip_confirmed BOOLEAN");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_session DOUBLE PRECISION");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_week DOUBLE PRECISION");
+                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_month DOUBLE PRECISION");
                 } catch (SQLException e) {
                 }
 
@@ -163,66 +181,15 @@ public class TimescaleRepository {
      * Internal synchronous save logic.
      */
     private int executeSave(List<Candle> candles, String symbol, String interval) {
-        String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
-                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
-                "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
-                "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
-                "ema15 = EXCLUDED.ema15, ema15_5 = EXCLUDED.ema15_5, ema15_15 = EXCLUDED.ema15_15, " +
-                "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_15_15_15 = EXCLUDED.ema15_15_15_15, ema15_15_15_15_30 = EXCLUDED.ema15_15_15_15_30, "
-                +
-                "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, "
-                +
-                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr";
-
-        int savedCount = 0;
         Connection conn = null;
-
         try {
             conn = timescaleClient.getConnection();
             if (conn == null)
                 return 0;
-
-            conn.setAutoCommit(false);
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                for (Candle candle : candles) {
-                    pstmt.setTimestamp(1, Timestamp.valueOf(candle.getTimestamp()));
-                    pstmt.setString(2, symbol);
-                    pstmt.setString(3, interval);
-                    pstmt.setDouble(4, candle.getOpen());
-                    pstmt.setDouble(5, candle.getHigh());
-                    pstmt.setDouble(6, candle.getLow());
-                    pstmt.setDouble(7, candle.getClose());
-                    pstmt.setDouble(8, candle.getVolume());
-
-                    setDoubleOrNull(pstmt, 9, candle.getEma15());
-                    setDoubleOrNull(pstmt, 10, candle.getEma15_5());
-                    setDoubleOrNull(pstmt, 11, candle.getEma15_15());
-                    setDoubleOrNull(pstmt, 12, candle.getEma15_15_15());
-                    setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15());
-                    setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30());
-                    setDoubleOrNull(pstmt, 15, candle.getStMa());
-                    setDoubleOrNull(pstmt, 16, candle.getStUp());
-                    setDoubleOrNull(pstmt, 17, candle.getStDn());
-                    setIntegerOrNull(pstmt, 18, candle.getStTrend());
-                    setDoubleOrNull(pstmt, 19, candle.getStMa2());
-                    setDoubleOrNull(pstmt, 20, candle.getStUp2());
-                    setDoubleOrNull(pstmt, 21, candle.getStDn2());
-                    setIntegerOrNull(pstmt, 22, candle.getStTrend2());
-                    setDoubleOrNull(pstmt, 23, candle.getAtr());
-
-                    pstmt.addBatch();
-                }
-                pstmt.executeBatch();
-                conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            }
+            return executeSaveWithConnection(conn, candles, symbol, interval);
         } catch (SQLException e) {
             System.err.println("TimescaleRepository: Batch save error: " + e.getMessage());
+            return 0;
         } finally {
             if (conn != null) {
                 try {
@@ -231,6 +198,72 @@ public class TimescaleRepository {
                 }
             }
         }
+    }
+
+    private int executeSaveWithConnection(Connection conn, List<Candle> candles, String symbol, String interval) throws SQLException {
+        String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
+                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, " +
+                "arc_value, arc_trend, arc_flip_confirmed, vwap_session, vwap_week, vwap_month) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
+                "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
+                "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
+                "ema15 = EXCLUDED.ema15, ema15_5 = EXCLUDED.ema15_5, ema15_15 = EXCLUDED.ema15_15, " +
+                "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_15_15_15 = EXCLUDED.ema15_15_15_15, ema15_15_15_15_30 = EXCLUDED.ema15_15_15_15_30, " +
+                "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, " +
+                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr, " +
+                "arc_value = EXCLUDED.arc_value, arc_trend = EXCLUDED.arc_trend, arc_flip_confirmed = EXCLUDED.arc_flip_confirmed, " +
+                "vwap_session = EXCLUDED.vwap_session, vwap_week = EXCLUDED.vwap_week, vwap_month = EXCLUDED.vwap_month";
+
+        int savedCount = 0;
+        boolean originalAutoCommit = conn.getAutoCommit();
+        conn.setAutoCommit(false);
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            for (Candle candle : candles) {
+                pstmt.setTimestamp(1, Timestamp.valueOf(candle.getTimestamp()));
+                pstmt.setString(2, symbol);
+                pstmt.setString(3, interval);
+                pstmt.setDouble(4, candle.getOpen());
+                pstmt.setDouble(5, candle.getHigh());
+                pstmt.setDouble(6, candle.getLow());
+                pstmt.setDouble(7, candle.getClose());
+                pstmt.setDouble(8, candle.getVolume());
+
+                setDoubleOrNull(pstmt, 9, candle.getEma15());
+                setDoubleOrNull(pstmt, 10, candle.getEma15_5());
+                setDoubleOrNull(pstmt, 11, candle.getEma15_15());
+                setDoubleOrNull(pstmt, 12, candle.getEma15_15_15());
+                setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15());
+                setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30());
+                setDoubleOrNull(pstmt, 15, candle.getStMa());
+                setDoubleOrNull(pstmt, 16, candle.getStUp());
+                setDoubleOrNull(pstmt, 17, candle.getStDn());
+                setIntegerOrNull(pstmt, 18, candle.getStTrend());
+                setDoubleOrNull(pstmt, 19, candle.getStMa2());
+                setDoubleOrNull(pstmt, 20, candle.getStUp2());
+                setDoubleOrNull(pstmt, 21, candle.getStDn2());
+                setIntegerOrNull(pstmt, 22, candle.getStTrend2());
+                setDoubleOrNull(pstmt, 23, candle.getAtr());
+
+                setDoubleOrNull(pstmt, 24, candle.getArcValue());
+                setBooleanOrNull(pstmt, 25, candle.getArcTrend());
+                setBooleanOrNull(pstmt, 26, candle.getArcFlipConfirmed());
+                setDoubleOrNull(pstmt, 27, candle.getVwapSession());
+                setDoubleOrNull(pstmt, 28, candle.getVwapWeek());
+                setDoubleOrNull(pstmt, 29, candle.getVwapMonth());
+
+                pstmt.addBatch();
+            }
+            pstmt.executeBatch();
+            conn.commit();
+            savedCount = candles.size();
+        } catch (SQLException e) {
+            conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(originalAutoCommit);
+        }
         return savedCount;
     }
 
@@ -238,7 +271,8 @@ public class TimescaleRepository {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, volume, " +
                 "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, " +
+                "arc_value, arc_trend, arc_flip_confirmed, vwap_session, vwap_week, vwap_month " +
                 "FROM candles " +
                 "WHERE symbol = ? AND interval = ? " +
                 "ORDER BY time DESC " +
@@ -280,6 +314,13 @@ public class TimescaleRepository {
                     candle.setStDn2(getDoubleOrNull(rs, "st_dn2"));
                     candle.setStTrend2(getIntegerOrNull(rs, "st_trend2"));
                     candle.setAtr(getDoubleOrNull(rs, "atr"));
+
+                    candle.setArcValue(getDoubleOrNull(rs, "arc_value"));
+                    candle.setArcTrend(getBooleanOrNull(rs, "arc_trend"));
+                    candle.setArcFlipConfirmed(getBooleanOrNull(rs, "arc_flip_confirmed"));
+                    candle.setVwapSession(getDoubleOrNull(rs, "vwap_session"));
+                    candle.setVwapWeek(getDoubleOrNull(rs, "vwap_week"));
+                    candle.setVwapMonth(getDoubleOrNull(rs, "vwap_month"));
 
                     candles.add(candle);
                 }
@@ -379,6 +420,18 @@ public class TimescaleRepository {
     private Integer getIntegerOrNull(ResultSet rs, String columnName) throws SQLException {
         int value = rs.getInt(columnName);
         return rs.wasNull() ? null : value;
+    }
+
+    private Boolean getBooleanOrNull(ResultSet rs, String columnName) throws SQLException {
+        boolean value = rs.getBoolean(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    private void setBooleanOrNull(PreparedStatement pstmt, int index, Boolean value) throws SQLException {
+        if (value != null)
+            pstmt.setBoolean(index, value);
+        else
+            pstmt.setNull(index, Types.BOOLEAN);
     }
 
     public List<String[]> getTrackedSymbols() {

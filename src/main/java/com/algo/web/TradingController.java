@@ -309,7 +309,16 @@ public class TradingController {
                     copy.setStUp(active.getStUp());
                     copy.setStDn(active.getStDn());
                     copy.setStTrend(active.getStTrend());
-                    copy.setStTrend(active.getStTrend());
+                    copy.setStMa2(active.getStMa2());
+                    copy.setStUp2(active.getStUp2());
+                    copy.setStDn2(active.getStDn2());
+                    copy.setStTrend2(active.getStTrend2());
+                    copy.setArcValue(active.getArcValue());
+                    copy.setArcTrend(active.getArcTrend());
+                    copy.setArcFlipConfirmed(active.getArcFlipConfirmed());
+                    copy.setVwapSession(active.getVwapSession());
+                    copy.setVwapWeek(active.getVwapWeek());
+                    copy.setVwapMonth(active.getVwapMonth());
 
                     if (shouldReplace) {
                         history.set(history.size() - 1, copy); // Replace the incomplete DB candle with the precise live
