@@ -416,7 +416,7 @@ const CanvasTradingChart = React.memo(({ symbol, initialInterval = '3min', isGri
         // Y-AXIS (Obsidian Sidebar)
         const isMobile = math.pr < 50;
         ctx.fillStyle = COLORS.bg; ctx.fillRect(math.cw, math.pt, math.pr + 1, math.ch);
-        ctx.fillStyle = '#64748b'; ctx.font = isMobile ? '8.5px Inter' : '9px Inter'; ctx.textAlign = 'center';
+        ctx.fillStyle = '#e2e8f0'; ctx.font = isMobile ? '8.5px Inter' : '9px Inter'; ctx.textAlign = 'center';
         for (let i = 0; i < 9; i++) {
             const y = math.pt + (math.ch / 8) * i;
             const priceText = math.y2p(y).toFixed(isMobile ? 0 : 1);

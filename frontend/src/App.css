@@ -807,6 +807,13 @@ html {
   align-items: center;
 }
 
+.main-tab-switcher {
+  position: absolute;
+  left: 170px; /* Safely placed to the right of the logo */
+  top: 10px;
+  z-index: 20;
+}
+
 .header-center {
   position: absolute;
   left: 50%;
@@ -1316,6 +1323,31 @@ html {
 
 
 
+/* C&P View - Responsive Grid */
+.cp-view-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+}
+
+.cp-panel {
+  min-height: 0;
+}
+
+@media (max-width: 640px) {
+  .cp-view-grid {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 1fr 1fr;
+    overflow-y: auto !important;
+    height: auto !important;
+  }
+
+  .cp-panel {
+    min-height: calc(50vh - 30px);
+    height: calc(50vh - 30px);
+  }
+}
+
 /* Mobile Responsiveness & Touch Optimizations */
 @media (max-width: 768px) {
   .app-container {
@@ -1336,24 +1368,34 @@ html {
   }
 
   .scanner-header.sticky-header {
-    display: grid !important;
-    grid-template-areas:
-      "logo . . tools"
-      "controls controls controls controls";
-    grid-template-columns: auto 1fr 1fr auto;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
     width: 100%;
     height: auto !important;
-    padding: 6px 10px;
-    gap: 8px;
+    padding: 10px !important;
     position: sticky !important;
     top: 0 !important;
     z-index: 1100 !important;
-    overflow: hidden;
+    overflow: visible !important;
   }
 
   .header-left {
-    grid-area: logo;
-    justify-content: flex-start;
+    position: absolute !important;
+    top: 8px !important;
+    left: 8px !important;
+    flex: none !important;
+    display: flex !important;
+    align-items: center !important;
+    z-index: 10;
+  }
+
+  .main-tab-switcher {
+    position: absolute !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    top: 8px !important;
+    margin-left: 0 !important;
   }
 
   .brand-logo span {
@@ -1366,23 +1408,29 @@ html {
   }
 
   .header-right {
-    grid-area: tools;
-    display: flex;
-    justify-content: flex-end;
+    position: absolute !important;
+    top: 8px !important;
+    right: 8px !important;
+    flex: none !important;
+    display: flex !important;
+    align-items: center !important;
+    z-index: 10;
   }
 
   .header-center {
-    grid-area: controls;
-    position: static !important;
+    position: relative !important;
     transform: none !important;
-    display: flex !important;
+    left: 0 !important;
+    flex: none !important;
     width: 100% !important;
-    gap: 4px !important;
-    overflow-x: auto;
-    scrollbar-width: none;
-    padding: 4px 0;
-    justify-content: space-between !important;
-    align-items: center;
+    margin-top: 36px !important; /* Push below the absolute left/right elements */
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    justify-content: center !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 0 4px !important;
+    overflow: visible !important; /* Must be visible so absolute dropdowns aren't clipped */
   }
 
   .header-center::-webkit-scrollbar {

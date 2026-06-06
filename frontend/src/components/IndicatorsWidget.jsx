@@ -16,20 +16,20 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
         {
             title: "Analysis Helpers",
             items: [
-                { key: 'CLOUD', label: 'Supertrend Cloud (ST42)' },
-                { key: 'CLOUD2', label: 'Supertrend Cloud (ST100)' },
-                { key: 'ARC_VWAP', label: 'Arc VWAP Supertrend' },
+                { key: 'CLOUD', label: 'Cloud 1' },
+                { key: 'CLOUD2', label: 'Cloud 2' },
+                { key: 'ARC_VWAP', label: 'Third Eye' },
             ]
         },
         {
-            title: "EMA Indicators (Cascaded)",
+            title: "Indicators (Cascaded)",
             items: [
-                { key: 'EMA15', label: 'EMA 15 (White)' },
-                { key: 'EMA15_5', label: 'EMA 15/5 (Red)' },
-                { key: 'EMA15_15', label: 'EMA 15/15 (Blue)' },
-                { key: 'EMA15_15_15', label: 'EMA 15/15/15 (Red)' },
-                { key: 'EMA15_15_15_15', label: 'EMA 15/15/15/15 (Yellow)' },
-                { key: 'EMA15_15_15_15_30', label: 'EMA 15/30 (Red)' },
+                { key: 'EMA15', label: 'Ind 1' },
+                { key: 'EMA15_5', label: 'Ind 2' },
+                { key: 'EMA15_15', label: 'Ind 3' },
+                { key: 'EMA15_15_15', label: 'Ind 4' },
+                { key: 'EMA15_15_15_15', label: 'Ind 5' },
+                { key: 'EMA15_15_15_15_30', label: 'Ind 6' },
             ]
         },
     ];

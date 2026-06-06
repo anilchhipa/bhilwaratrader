@@ -24,11 +24,17 @@ function App() {
   const scannerCategoryRef = useRef('STOCKS');
   const scannerTfRef = useRef('3min');
 
+  const [mainTab, setMainTab] = useState(() => localStorage.getItem('main_tab') || 'SCANNER');
   const [pageIndex, setPageIndex] = useState(0);
   const [maximizedChart, setMaximizedChart] = useState(null);
   const [highlightedSymbol, setHighlightedSymbol] = useState(null);
   const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('scanner_grid_layout') || '2x4');
   const [isZenMode, setIsZenMode] = useState(false);
+  const [cpTf, setCpTf] = useState(() => localStorage.getItem('cp_tf') || '3min');
+  const [cpSelectedCE, setCpSelectedCE] = useState(() => localStorage.getItem('cp_selected_ce') || null);
+  const [cpSelectedPE, setCpSelectedPE] = useState(() => localStorage.getItem('cp_selected_pe') || null);
+  const [cpCeOpen, setCpCeOpen] = useState(false);
+  const [cpPeOpen, setCpPeOpen] = useState(false);
   const isZenModeRef = useRef(false); // Ref so keydown handler never captures a stale value
 
   const [activeWidgets, setActiveWidgets] = useState({
@@ -60,6 +66,19 @@ function App() {
   }, []);
 
   const toggleWidget = (id) => setActiveWidgets(prev => ({ ...prev, [id]: !prev[id] }));
+
+  useEffect(() => {
+    if (cpSelectedCE) localStorage.setItem('cp_selected_ce', cpSelectedCE);
+    else localStorage.removeItem('cp_selected_ce');
+  }, [cpSelectedCE]);
+
+  useEffect(() => {
+    if (cpSelectedPE) localStorage.setItem('cp_selected_pe', cpSelectedPE);
+    else localStorage.removeItem('cp_selected_pe');
+  }, [cpSelectedPE]);
+
+  const setMainTabPersist = useCallback((tab) => { localStorage.setItem('main_tab', tab); setMainTab(tab); setCpCeOpen(false); setCpPeOpen(false); }, []);
+  const setCpTfPersist = useCallback((tf) => { localStorage.setItem('cp_tf', tf); setCpTf(tf); }, []);
 
   const setScannerCategoryWithRef = useCallback((cat) => { scannerCategoryRef.current = cat; setScannerCategory(cat); }, []);
   const setScannerTfWithRef = useCallback((tf) => { scannerTfRef.current = tf; setScannerTf(tf); }, []);
@@ -324,6 +343,18 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [maxPages, setScannerCategoryWithRef, scannerCategories, maximizedChart]);
 
+  // C&P — independent CE / PE selection with LTP
+  const cpCallsSorted = useMemo(() => {
+    const ex = s => { const m = s.match(/(\d+)[CP]E$/); return m ? parseInt(m[1], 10) : 0; };
+    return [...(scannerCategories['CALLS'] || [])].sort((a, b) => ex(a) - ex(b));
+  }, [scannerCategories]);
+  const cpPutsSorted = useMemo(() => {
+    const ex = s => { const m = s.match(/(\d+)[CP]E$/); return m ? parseInt(m[1], 10) : 0; };
+    return [...(scannerCategories['PUTS'] || [])].sort((a, b) => ex(a) - ex(b));
+  }, [scannerCategories]);
+  const cpActiveCE = (cpSelectedCE && cpCallsSorted.includes(cpSelectedCE)) ? cpSelectedCE : (cpCallsSorted[0] || null);
+  const cpActivePE = (cpSelectedPE && cpPutsSorted.includes(cpSelectedPE)) ? cpSelectedPE : (cpPutsSorted[0] || null);
+
   return (
     <LiveFeedProvider>
       <div className="app-container">
@@ -331,7 +362,7 @@ function App() {
           <main className="chart-section no-sidebar">
             <div className="scanner-view-container">
               <div className="scanner-header sticky-header" style={{ display: isZenMode ? 'none' : 'flex' }}>
-                {/* Header Left: Logo */}
+                {/* Header Left: Logo + Main Tab Switch */}
                 <div className="header-left">
                   <div className="brand-logo" style={{ display: 'flex', alignItems: 'center', gap: '0px', userSelect: 'none' }}>
                     <span style={{ fontFamily: '"Dancing Script", cursive', fontSize: '22px', fontWeight: '700', color: '#f8fafc', letterSpacing: '0.5px' }}>Bhilwara</span>
@@ -339,9 +370,28 @@ function App() {
                   </div>
                 </div>
 
+                {/* Main Tab Switcher */}
+                <div className="main-tab-switcher" style={{ display: 'flex', gap: '3px', background: 'rgba(0,0,0,0.45)', padding: '3px', borderRadius: '9px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <button
+                    className={`tf-tab ${mainTab === 'SCANNER' ? 'active' : ''}`}
+                    onClick={() => setMainTabPersist('SCANNER')}
+                    style={{ fontSize: '9px', padding: '3px 10px', minWidth: '52px', letterSpacing: '0.5px' }}
+                  >SCANNER</button>
+                  <button
+                    className={`tf-tab ${mainTab === 'CP' ? 'active' : ''}`}
+                    onClick={() => setMainTabPersist('CP')}
+                    style={{
+                      fontSize: '9px', padding: '3px 10px', minWidth: '52px', letterSpacing: '0.5px',
+                      background: mainTab === 'CP' ? 'linear-gradient(135deg, #10b981, #3b82f6)' : 'transparent',
+                      color: mainTab === 'CP' ? '#fff' : '#94a3b8',
+                      boxShadow: mainTab === 'CP' ? '0 0 14px rgba(16,185,129,0.3)' : 'none',
+                    }}
+                  >C &amp; P</button>
+                </div>
+
                 {/* Header Center: Navigation & Categories */}
                 <div className="header-center">
-                  {!maximizedChart && (
+                  {mainTab === 'SCANNER' && !maximizedChart && (
                     <div style={{ display: 'flex', gap: '4px' }}>
                       <div className="scanner-tf-selector" style={{ margin: 0 }}>
                         {['1min', '3min', '5min', '15min'].map(tf => (
@@ -357,54 +407,111 @@ function App() {
                     </div>
                   )}
 
-                  {/* Sync Indicator (Centralized) */}
-                  <div className="scanner-tf-selector sync-box" data-tooltip="Next Candle Sync" style={{
-                    margin: 0,
-                    width: '54px',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    background: syncSeconds <= 30 ? 'rgba(251, 191, 36, 0.12)' : 'rgba(0,0,0,0.4)',
-                    border: syncSeconds <= 30 ? '1px solid rgba(251, 191, 36, 0.4)' : '1px solid rgba(255,255,255,0.1)',
-                  }}>
-                    <div style={{
-                      width: '4px',
-                      height: '4px',
-                      borderRadius: '50%',
-                      background: syncSeconds <= 30 ? '#fbbf24' : '#64748b',
-                      boxShadow: syncSeconds <= 10 ? '0 0 10px #fbbf24' : 'none',
-                    }} />
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: '900',
-                      color: syncSeconds <= 30 ? '#fbbf24' : '#94a3b8',
-                      fontFamily: 'monospace'
-                    }}>
-                      {Math.floor(syncSeconds / 60)}:{(syncSeconds % 60).toString().padStart(2, '0')}
-                    </span>
-                  </div>
-
-                  {/* Page Navigation (Centralized) */}
-                  <div className="scanner-tf-selector page-nav-box" style={{ margin: 0, justifyContent: 'space-between', gap: '2px' }}>
-                    <button disabled={pageIndex === 0} onClick={() => setPageIndex(p => p - 1)} className="tf-tab" data-tooltip="Previous Page" style={{ cursor: pageIndex === 0 ? 'not-allowed' : 'pointer', opacity: pageIndex === 0 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>◀</button>
-                    <span className="page-label" style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.4px', padding: '0 4px' }}>PAGE {pageIndex + 1}/{maxPages || 1}</span>
-                    <span className="page-label-small" style={{ display: 'none', color: '#cbd5e1', fontSize: '10px', fontWeight: '900', alignItems: 'center', justifyContent: 'center' }}>{pageIndex + 1}/{maxPages || 1}</span>
-                    <button disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex(p => p + 1)} className="tf-tab" data-tooltip="Next Page" style={{ cursor: pageIndex >= maxPages - 1 ? 'not-allowed' : 'pointer', opacity: pageIndex >= maxPages - 1 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>▶</button>
-                  </div>
-
-                  <div className="scanner-category-tabs" style={{ margin: 0 }}>
-                    {Object.keys(scannerCategories).map(cat => {
-                      const labels = { INDEX: 'IN', STOCKS: 'ST', FUTURES: 'FU', CALLS: 'CL', PUTS: 'PT' };
-                      return (
-                        <button
-                          key={cat}
-                          className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
-                          onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); }}
-                        >
-                          {labels[cat] || cat} <span className="cat-count">({scannerCategories[cat].length})</span>
+                  {mainTab === 'CP' && (
+                      <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <button onClick={() => { setCpCeOpen(o => !o); setCpPeOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: cpCeOpen ? 'rgba(16,185,129,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpCeOpen ? 'rgba(16,185,129,0.5)' : 'rgba(16,185,129,0.25)'}`, borderRadius: '7px', padding: '3px 8px', height: '24px', cursor: 'pointer' }}>
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>{cpActiveCE ? (cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/) ? `${cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/)[1]} CE` : 'SELECT') : 'SELECT CE'}</span>
+                          {cpActiveCE && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: symbolPrices[cpActiveCE]?.isGreen ? '#10b981' : '#f87171' }}> - {symbolPrices[cpActiveCE]?.price?.toFixed(2) ?? ''}</span>}
+                          <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '2px' }}>{cpCeOpen ? '▲' : '▼'}</span>
                         </button>
-                      );
-                    })}
-                  </div>
+                        {cpCeOpen && (
+                          <>
+                            <div onClick={() => setCpCeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                            <div style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
+                              <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#10b981', letterSpacing: '1px' }}>SELECT CALL</span></div>
+                              {cpCallsSorted.map(sym => { const ltp = symbolPrices[sym]; const active = sym === cpActiveCE; return (
+                                <div key={sym} onClick={() => { setCpSelectedCE(sym); setCpCeOpen(false); }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px', cursor: 'pointer', background: active ? 'rgba(16,185,129,0.12)' : 'transparent', borderLeft: active ? '2px solid #10b981' : '2px solid transparent' }}
+                                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                  <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#e2e8f0', flex: 1 }}>{sym.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/) ? `${sym.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/)[1]} CE` : sym}</span>
+                                  {ltp && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: ltp.isGreen ? '#10b981' : '#f87171', minWidth: '50px', textAlign: 'right' }}>{ltp.price?.toFixed(2)}</span>}
+                                  {active && <span style={{ fontSize: '9px', color: '#10b981' }}>✓</span>}
+                                </div>
+                              ); })}
+                              {cpCallsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No calls</div>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                  )}
+
+                  {mainTab === 'CP' && (
+                    <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                      <div className="scanner-tf-selector" style={{ margin: 0 }}>
+                        {['1min', '3min', '5min', '15min'].map(tf => (
+                          <button
+                            key={tf}
+                            className={`tf-tab ${cpTf === tf ? 'active' : ''}`}
+                            onClick={() => setCpTfPersist(tf)}
+                          >
+                            {tf.replace('min', 'M').toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+
+
+                  {mainTab === 'SCANNER' && (
+                    <>
+                      {/* Page Navigation */}
+                      <div className="scanner-tf-selector page-nav-box" style={{ margin: 0, justifyContent: 'space-between', gap: '2px' }}>
+                        <button disabled={pageIndex === 0} onClick={() => setPageIndex(p => p - 1)} className="tf-tab" data-tooltip="Previous Page" style={{ cursor: pageIndex === 0 ? 'not-allowed' : 'pointer', opacity: pageIndex === 0 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>◀</button>
+                        <span className="page-label" style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.4px', padding: '0 4px' }}>PAGE {pageIndex + 1}/{maxPages || 1}</span>
+                        <span className="page-label-small" style={{ display: 'none', color: '#cbd5e1', fontSize: '10px', fontWeight: '900', alignItems: 'center', justifyContent: 'center' }}>{pageIndex + 1}/{maxPages || 1}</span>
+                        <button disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex(p => p + 1)} className="tf-tab" data-tooltip="Next Page" style={{ cursor: pageIndex >= maxPages - 1 ? 'not-allowed' : 'pointer', opacity: pageIndex >= maxPages - 1 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>▶</button>
+                      </div>
+
+                      <div className="scanner-category-tabs" style={{ margin: 0 }}>
+                        {Object.keys(scannerCategories).map(cat => {
+                          const labels = { INDEX: 'IN', STOCKS: 'ST', FUTURES: 'FU', CALLS: 'CL', PUTS: 'PT' };
+                          return (
+                            <button
+                              key={cat}
+                              className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
+                              onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); }}
+                            >
+                              {labels[cat] || cat} <span className="cat-count">({scannerCategories[cat].length})</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  {mainTab === 'CP' && (
+                      <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <button onClick={() => { setCpPeOpen(o => !o); setCpCeOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: cpPeOpen ? 'rgba(239,68,68,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpPeOpen ? 'rgba(239,68,68,0.5)' : 'rgba(239,68,68,0.25)'}`, borderRadius: '7px', padding: '3px 8px', height: '24px', cursor: 'pointer' }}>
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>{cpActivePE ? (cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/) ? `${cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/)[1]} PE` : 'SELECT') : 'SELECT PE'}</span>
+                          {cpActivePE && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: symbolPrices[cpActivePE]?.isGreen ? '#10b981' : '#f87171' }}> - {symbolPrices[cpActivePE]?.price?.toFixed(2) ?? ''}</span>}
+                          <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '2px' }}>{cpPeOpen ? '▲' : '▼'}</span>
+                        </button>
+                        {cpPeOpen && (
+                          <>
+                            <div onClick={() => setCpPeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                            <div style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
+                              <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#f87171', letterSpacing: '1px' }}>SELECT PUT</span></div>
+                              {cpPutsSorted.map(sym => { const ltp = symbolPrices[sym]; const active = sym === cpActivePE; return (
+                                <div key={sym} onClick={() => { setCpSelectedPE(sym); setCpPeOpen(false); }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px', cursor: 'pointer', background: active ? 'rgba(239,68,68,0.12)' : 'transparent', borderLeft: active ? '2px solid #ef4444' : '2px solid transparent' }}
+                                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                  <span style={{ fontSize: '11px', fontFamily: 'monospace', color: '#e2e8f0', flex: 1 }}>{sym.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/) ? `${sym.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/)[1]} PE` : sym}</span>
+                                  {ltp && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: ltp.isGreen ? '#10b981' : '#f87171', minWidth: '50px', textAlign: 'right' }}>{ltp.price?.toFixed(2)}</span>}
+                                  {active && <span style={{ fontSize: '9px', color: '#ef4444' }}>✓</span>}
+                                </div>
+                              ); })}
+                              {cpPutsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No puts</div>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                  )}
+
                 </div>
 
                 {/* Header Right: Tools */}
@@ -437,7 +544,25 @@ function App() {
                 </div>
               </div>
 
-              {maximizedChart ? (
+              {mainTab === 'CP' ? (
+                <div className="cp-view-grid" style={{ gap: '4px', flex: 1, minHeight: 0, overflow: 'hidden', height: isZenMode ? 'calc(100vh - 10px)' : 'calc(100vh - 52px)', padding: '4px' }}>
+
+                  {/* CALL side */}
+                  <div className="cp-panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(16,185,129,0.12)', borderRadius: '8px', overflow: 'visible' }}>
+                      {cpActiveCE ? <CanvasTradingChart key={cpActiveCE} symbol={cpActiveCE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={tf => setMaximizedChart({ sym: cpActiveCE, tf })} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} symbolPrices={symbolPrices} onDelete={fetchAll} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📈</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Call above</span></div>}
+                    </div>
+                  </div>
+
+                  {/* PUT side */}
+                  <div className="cp-panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(239,68,68,0.12)', borderRadius: '8px', overflow: 'visible' }}>
+                      {cpActivePE ? <CanvasTradingChart key={cpActivePE} symbol={cpActivePE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={tf => setMaximizedChart({ sym: cpActivePE, tf })} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} symbolPrices={symbolPrices} onDelete={fetchAll} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📉</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Put above</span></div>}
+                    </div>
+                  </div>
+
+                </div>
+              ) : maximizedChart ? (
                 <div className="maximized-active-layout-inline" style={{
                   flex: 1,
                   display: 'grid',
