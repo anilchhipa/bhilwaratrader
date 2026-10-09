@@ -107,10 +107,7 @@ html {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow-y: auto;
-  /* Enable vertical scroll for the whole section */
-  scrollbar-width: thin;
-  scrollbar-color: rgba(59, 130, 246, 0.3) transparent;
+  overflow: hidden;
 }
 
 .scanner-view-container {
@@ -118,7 +115,9 @@ html {
   flex-direction: column;
   max-width: 100%;
   flex: 1;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .scanner-header.sticky-header {
@@ -126,7 +125,7 @@ html {
   top: 0;
   z-index: 1000;
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.9) 0%, rgba(10, 15, 29, 0.98) 100%);
-  padding: 10px 16px;
+  padding: 3px 3px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(16px);
@@ -175,7 +174,7 @@ html {
 .charts-grid {
   display: grid;
   grid-auto-rows: 1fr;
-  gap: 8px;
+  gap: 4px;
   flex: 1;
   min-height: 0;
   padding-bottom: 6px;
@@ -782,7 +781,7 @@ html {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  gap: 8px;
+  gap: 4px;
 }
 
 .scanner-header {
@@ -807,10 +806,50 @@ html {
   align-items: center;
 }
 
+.brand-logo-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(251, 191, 36, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 35% 35%, rgba(251, 191, 36, 0.15) 0%, rgba(15, 23, 42, 0.7) 100%);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.25), inset 0 0 5px rgba(251, 191, 36, 0.15);
+  font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-sizing: border-box;
+}
+
+.brand-logo-circle:hover {
+  border-color: #fbbf24;
+  box-shadow: 0 0 15px rgba(251, 191, 36, 0.45), inset 0 0 8px rgba(251, 191, 36, 0.25);
+  transform: scale(1.05);
+}
+
+.brand-logo-circle .bt-b {
+  color: #f8fafc;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.brand-logo-circle .bt-t {
+  color: #fbbf24;
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 1px;
+}
+
 .main-tab-switcher {
-  position: absolute;
-  left: 170px; /* Safely placed to the right of the logo */
-  top: 10px;
+  display: flex;
+  align-items: center;
   z-index: 20;
 }
 
@@ -822,6 +861,138 @@ html {
   justify-content: center;
   align-items: center;
   gap: 12px;
+}
+
+/* Mobile / Desktop Header Switch Visibility */
+.mobile-only-header {
+  display: none !important;
+}
+
+.desktop-only-header {
+  display: flex !important;
+}
+
+/* C&P Header Pill Display */
+.cp-pill-strike {
+  font-size: 11px;
+  font-weight: 700;
+  color: #e2e8f0;
+  font-family: monospace;
+}
+
+.cp-pill-dash {
+  font-size: 11px;
+  color: #64748b;
+  font-family: monospace;
+  user-select: none;
+}
+
+.cp-pill-price {
+  font-size: 11px;
+  font-weight: 900;
+  font-family: monospace;
+}
+
+/* Mobile Header Pills & Dropdowns */
+.mobile-header-pill {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 2px 6px;
+  height: 24px;
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.mobile-header-pill:active {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.mobile-header-pill .pill-arrow {
+  font-size: 7px;
+  color: #94a3b8;
+  margin-left: 1px;
+}
+
+.mobile-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  background: #0f172a;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 90px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mobile-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+
+.mobile-dropdown-item:active,
+.mobile-dropdown-item.active {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+}
+
+/* Zen Exit Floating Button */
+.zen-exit-floating-btn {
+  position: fixed;
+  top: 8px;
+  right: 10px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 16px;
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.zen-exit-floating-btn:hover,
+.zen-exit-floating-btn:active {
+  background: rgba(239, 68, 68, 0.9);
+  border-color: #ef4444;
+  color: #ffffff;
 }
 
 .header-right {
@@ -1350,9 +1521,29 @@ html {
 
 /* Mobile Responsiveness & Touch Optimizations */
 @media (max-width: 768px) {
+
+  /* Completely hide scrollbars on mobile while preserving touch scrolling */
+  html,
+  body,
+  * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+
+  ::-webkit-scrollbar,
+  *::-webkit-scrollbar,
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent !important;
+  }
+
   .app-container {
     padding: 0;
   }
+
 
   .cat-count {
     display: none;
@@ -1367,74 +1558,119 @@ html {
     margin: 0 4px;
   }
 
+  .mobile-only-header {
+    display: flex !important;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .desktop-only-header {
+    display: none !important;
+  }
+
+  .cp-pill-strike,
+  .cp-pill-dash {
+    display: none !important;
+  }
+
+  .hide-single-page-mobile {
+    display: none !important;
+  }
+
   .scanner-header.sticky-header {
-    flex-direction: column !important;
-    justify-content: flex-start !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
     align-items: center !important;
     width: 100%;
-    height: auto !important;
-    padding: 10px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 2px 6px !important;
     position: sticky !important;
     top: 0 !important;
     z-index: 1100 !important;
     overflow: visible !important;
+    gap: 4px !important;
+    box-sizing: border-box !important;
   }
 
   .header-left {
-    position: absolute !important;
-    top: 8px !important;
-    left: 8px !important;
+    position: static !important;
     flex: none !important;
     display: flex !important;
     align-items: center !important;
+    gap: 4px !important;
     z-index: 10;
   }
 
   .main-tab-switcher {
-    position: absolute !important;
-    left: 50% !important;
-    transform: translateX(-50%) !important;
-    top: 8px !important;
-    margin-left: 0 !important;
+    position: static !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 2px !important;
+    gap: 2px !important;
+    border-radius: 6px !important;
+    flex-shrink: 0 !important;
   }
 
-  .brand-logo span {
-    font-size: 16px !important;
+  .main-tab-switcher button {
+    font-size: 9px !important;
+    padding: 2px 6px !important;
+    min-width: 26px !important;
+    letter-spacing: 0.2px !important;
+    font-weight: 800 !important;
+  }
+
+  .brand-logo-circle {
+    width: 26px !important;
+    height: 26px !important;
+  }
+
+  .brand-logo-circle .bt-b,
+  .brand-logo-circle .bt-t {
+    font-size: 11px !important;
     letter-spacing: 0 !important;
   }
 
-  .brand-logo span:last-child {
-    margin-left: 3px !important;
-  }
-
-  .header-right {
-    position: absolute !important;
-    top: 8px !important;
-    right: 8px !important;
-    flex: none !important;
-    display: flex !important;
-    align-items: center !important;
-    z-index: 10;
+  .brand-logo-circle .bt-t {
+    margin-left: 1px !important;
   }
 
   .header-center {
-    position: relative !important;
+    position: static !important;
     transform: none !important;
-    left: 0 !important;
-    flex: none !important;
-    width: 100% !important;
-    margin-top: 36px !important; /* Push below the absolute left/right elements */
+    left: auto !important;
+    flex: 1 !important;
+    width: auto !important;
+    margin-top: 0 !important;
     display: flex !important;
     flex-wrap: nowrap !important;
     justify-content: center !important;
     align-items: center !important;
-    gap: 8px !important;
-    padding: 0 4px !important;
-    overflow: visible !important; /* Must be visible so absolute dropdowns aren't clipped */
+    gap: 3px !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    min-width: 0 !important;
   }
 
-  .header-center::-webkit-scrollbar {
-    display: none;
+  .header-right {
+    position: static !important;
+    flex: none !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 2px !important;
+    z-index: 10;
+  }
+
+  .header-right .scanner-tf-selector {
+    padding: 2px 3px !important;
+    gap: 3px !important;
+    height: 26px !important;
+  }
+
+  .header-right .tf-tab {
+    min-width: 22px !important;
+    height: 20px !important;
+    padding: 0 !important;
   }
 
   .sync-box {
@@ -1469,7 +1705,7 @@ html {
     display: flex !important;
     gap: 2px !important;
     border-radius: 6px !important;
-    height: 28px !important;
+    height: 24px !important;
     margin: 0 !important;
     align-items: center;
   }
@@ -1477,8 +1713,9 @@ html {
   .tf-tab,
   .cat-tab {
     flex: 0 0 auto;
-    min-height: 22px !important;
-    padding: 0 6px !important;
+    min-height: 20px !important;
+    height: 20px !important;
+    padding: 0 5px !important;
     min-width: auto !important;
     font-size: 9px !important;
     font-weight: 800 !important;
@@ -1494,6 +1731,8 @@ html {
     width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
   }
 
   .grid-chart-item {
@@ -1511,20 +1750,24 @@ html {
   }
 
   .maximized-active-layout-inline {
-    grid-template-columns: 1fr !important;
-    grid-template-rows: auto auto 1fr !important;
-    height: auto !important;
-    overflow-y: auto;
-    padding: 10px !important;
-    gap: 15px !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #020617 !important;
   }
 
   .anchor-slot {
-    height: 260px !important;
+    display: none !important;
   }
 
   .main-max-slot {
-    height: 450px !important;
+    flex: 1 !important;
+    height: 100% !important;
+    width: 100% !important;
+    border: none !important;
+    border-radius: 0 !important;
   }
 
   /* Widget panels on mobile */
@@ -1614,8 +1857,14 @@ html {
 }
 
 @media (max-width: 480px) {
-  .brand-logo span {
-    font-size: 18px !important;
+  .brand-logo-circle {
+    width: 26px !important;
+    height: 26px !important;
+  }
+
+  .brand-logo-circle .bt-b,
+  .brand-logo-circle .bt-t {
+    font-size: 11px !important;
   }
 
   .checkbox-list {

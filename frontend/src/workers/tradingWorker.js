@@ -36,6 +36,9 @@ const portTopics = new Map();
 /** `symbol/interval` → port[] — which windows are waiting for a snapshot */
 const snapshotWaiters = {};
 
+/** `symbol/interval` → latest snapshot data for immediate delivery on tab/component remounts */
+const snapshotCache = {};
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function cleanupPort(port) {
@@ -97,7 +100,8 @@ function ensureStompSub(topic) {
     if (topicSubs[topic]?.stompSub) return; // Already live
 
     const stompSub = stompClient.subscribe(topic, (msg) => {
-        const isProto = msg.headers?.['content-type'] === 'application/x-protobuf';
+        const ct = msg.headers?.['content-type'];
+        const isProto = ct === 'application/x-protobuf' || ct === 'application/octet-stream';
 
         // Snapshot a copy of the binary body before the STOMP frame is recycled
         let binaryBody = null;
@@ -158,6 +162,7 @@ function connect() {
 
                 if (data?.type === 'SNAPSHOT' && data.symbol && data.interval) {
                     const key = `${data.symbol}/${data.interval}`;
+                    snapshotCache[key] = { data, ts: Date.now() }; // Cache with timestamp (15s TTL)
                     const waiters = snapshotWaiters[key] ?? [];
                     const deadWaiters = [];
                     waiters.forEach(port => {
@@ -239,6 +244,12 @@ function handlePortMessage(port, event) {
         case 'REGISTER_SNAPSHOT': {
             if (!symbol || !interval) break;
             const key = `${symbol}/${interval}`;
+            const cached = snapshotCache[key];
+            if (cached && cached.data && (Date.now() - (cached.ts || 0) < 15000)) {
+                try {
+                    port.postMessage({ type: 'SNAPSHOT', key, data: cached.data });
+                } catch (_) {}
+            }
             if (!snapshotWaiters[key]) snapshotWaiters[key] = [];
             if (!snapshotWaiters[key].includes(port)) snapshotWaiters[key].push(port);
             break;

@@ -12,3 +12,12 @@ target/
 
 # Logs
 *.log
+.git.backup/
+
+# Scratch & test scripts
+pine.txt
+TestRenkoEma.java
+test.py
+patch_chart.js
+renko_guppy_demo.html
+test_renko_*.js

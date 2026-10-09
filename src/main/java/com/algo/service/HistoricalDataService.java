@@ -20,16 +20,15 @@ public class HistoricalDataService {
     // Track ongoing syncs to prevent redundant parallel API calls for the same
     // symbol/timeframe
     private final Set<String> syncingSyncs = Collections.synchronizedSet(new HashSet<>());
-
     private static final Map<String, Integer> INTERVAL_MINUTES = new HashMap<>();
     static {
         INTERVAL_MINUTES.put("1min", 1);
         INTERVAL_MINUTES.put("3min", 3);
         INTERVAL_MINUTES.put("5min", 5);
-        INTERVAL_MINUTES.put("15min", 15);
     }
 
-    private static final String[] TIMEFRAMES = { "1min", "3min", "5min", "15min" };
+    // "10kV" and "50kV" removed from sync loop — volume candles are disabled.
+    private static final String[] TIMEFRAMES = { "5min", "3min", "1min" /* , "10kV", "50kV" */ };
 
     public HistoricalDataService(ZerodhaClient zerodhaClient, TimescaleRepository repository,
             com.algo.core.IndicatorConfig indicatorConfig) {
@@ -51,32 +50,35 @@ public class HistoricalDataService {
             return;
 
         try {
-            // Reduced requiredCount to 1000. This is still 60x the lookback for EMAs
-            // and ensures tiered loading (which might cap at 1500 candles) skips the API
-            // call.
-            int requiredCount = 1000;
+            boolean isOption = isOptionSymbol(symbol);
             System.out.println("Checking historical data for " + symbol
+                    + (isOption ? " [OPTION — fetching all available candles]" : "")
                     + (targetTimeframe != null ? " [" + targetTimeframe + "]" : ""));
 
             for (String tf : TIMEFRAMES) {
-                if (targetTimeframe != null && !targetTimeframe.equals(tf))
+                if (targetTimeframe != null && !targetTimeframe.equals(tf) && !isOption)
                     continue;
 
-                if (shouldFetch(symbol, tf, requiredCount)) {
-                    // Optimized tiered loading:
-                    // 1min : 7 days → ~2600 candles (Enough for EMA/SuperTrend warm-up)
-                    // 3min : 15 days → ~1800 candles
-                    // 5min : 30 days → ~2250 candles
-                    // 15min: 60 days → ~1500 candles (Longer history for higher TFs)
-                    int days = 60;
-                    if (tf.equals("1min"))
-                        days = 7;
-                    else if (tf.equals("3min"))
-                        days = 15;
-                    else if (tf.equals("5min"))
-                        days = 30;
+                if (isOption) {
+                    // Options have a limited life (current expiry cycle).
+                    // Always fetch ALL available candles — go back 100 days to cover the
+                    // full expiry cycle and listing lifetime.
+                    fetchAndSave(symbol, token, tf, 100);
+                } else {
+                    // Regular index/equity: tiered loading is sufficient
+                    int requiredCount = 1000;
+                    if (shouldFetch(symbol, tf, requiredCount)) {
+                        // 1min : 7 days  → ~2600 candles
+                        // 3min : 15 days → ~1800 candles
+                        // 5min : 30 days → ~2250 candles
+                        int days = 30;
+                        if (tf.equals("1min"))
+                            days = 7;
+                        else if (tf.equals("3min"))
+                            days = 15;
 
-                    fetchAndSave(symbol, token, tf, days);
+                        fetchAndSave(symbol, token, tf, days);
+                    }
                 }
             }
         } finally {
@@ -84,8 +86,20 @@ public class HistoricalDataService {
         }
     }
 
+    /**
+     * Returns true if the symbol is an options contract (CE/PE suffix or
+     * exchange-prefixed BFO/NFO option pattern).
+     */
+    private boolean isOptionSymbol(String symbol) {
+        if (symbol == null) return false;
+        String s = symbol.trim().toUpperCase();
+        return s.endsWith("CE") || s.endsWith("PE")
+                || s.endsWith("CALL") || s.endsWith("PUT")
+                || s.contains(" CE") || s.contains(" PE");
+    }
+
     private boolean shouldFetch(String symbol, String tf, int requiredCount) {
-        int existingCount = repository.getCandleCount(symbol, tf);
+        int existingCount = repository.getCandleCount(symbol, tf, requiredCount);
         if (existingCount < requiredCount) {
             return true;
         }
@@ -202,11 +216,13 @@ public class HistoricalDataService {
         if (candles == null || candles.isEmpty())
             return;
 
-        com.algo.core.Strategy strategy = new com.algo.core.Strategy(indicatorConfig);
+        // Pass timeframe so SupertrendMtfHeikinAshi (stHa) resolves the correct HTF
+        String tf = (timeframe != null && !timeframe.isEmpty()) ? timeframe : "1min";
+        com.algo.core.Strategy strategy = new com.algo.core.Strategy(indicatorConfig, tf);
 
         // Warm up if we have prior context
         if (symbol != null && timeframe != null) {
-            List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 300);
+            List<Candle> priorHistory = repository.getLatestCandles(symbol, timeframe, 2000);
             if (priorHistory != null) {
                 for (int i = 0; i < priorHistory.size(); i++) {
                     Candle prev = i > 0 ? priorHistory.get(i - 1) : null;
@@ -215,36 +231,52 @@ public class HistoricalDataService {
             }
         }
 
-        // Logic: If we are not calculating the 15m chart itself, try to find the 15m
-        // bias context
-        Map<LocalDateTime, Integer> macroBiasMap = new HashMap<>();
-        if (symbol != null && !"15min".equals(timeframe)) {
-            List<Candle> macroCandles = repository.getLatestCandles(symbol, "15min", 1000);
-            if (macroCandles != null) {
-                com.algo.core.Strategy macroPrep = new com.algo.core.Strategy(indicatorConfig);
-                for (int i = 0; i < macroCandles.size(); i++) {
-                    Candle prev = i > 0 ? macroCandles.get(i - 1) : null;
-                    macroPrep.onNewCandle(prev, macroCandles.get(i), 0);
-                    macroBiasMap.put(macroCandles.get(i).getTimestamp(), macroPrep.getBias());
-                }
-            }
-        }
-
         for (int i = 0; i < candles.size(); i++) {
             Candle candle = candles.get(i);
-            int bias = 0;
-            if ("15min".equals(timeframe)) {
-                bias = 999;
-            } else if (!macroBiasMap.isEmpty()) {
-                // Find the 15m candle that contained this candle's timestamp
-                LocalDateTime candleTime = candle.getTimestamp();
-                LocalDateTime macroTime = candleTime.withMinute((candleTime.getMinute() / 15) * 15).withSecond(0)
-                        .withNano(0);
-                bias = macroBiasMap.getOrDefault(macroTime, 0);
-            }
             Candle prev = i > 0 ? candles.get(i - 1) : null;
-            strategy.onNewCandle(prev, candle, bias);
+            strategy.onNewCandle(prev, candle, 0);
         }
+    }
+
+    public List<Candle> buildVolumeHistory(String symbol, String volumeInterval) {
+        double targetVol = Double.parseDouble(volumeInterval.replace("kV", "")) * 1000;
+        
+        List<Candle> baseCandles = repository.getLatestCandles(symbol, "1min", 5000);
+        if (baseCandles == null || baseCandles.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        // Safety check for indices: if there is zero volume across the board, volume candles cannot form.
+        double totalBaseVol = baseCandles.stream().mapToDouble(Candle::getVolume).sum();
+        if (totalBaseVol == 0) {
+            return new ArrayList<>();
+        }
+        
+        List<Candle> volCandles = new ArrayList<>();
+        Candle currentVolCandle = null;
+        
+        for (Candle c : baseCandles) {
+            if (currentVolCandle == null) {
+                currentVolCandle = new Candle(c.getOpen(), c.getHigh(), c.getLow(), c.getClose(), c.getVolume(), c.getTimestamp());
+            } else {
+                currentVolCandle.setHigh(Math.max(currentVolCandle.getHigh(), c.getHigh()));
+                currentVolCandle.setLow(Math.min(currentVolCandle.getLow(), c.getLow()));
+                currentVolCandle.setClose(c.getClose());
+                currentVolCandle.setVolume(currentVolCandle.getVolume() + c.getVolume());
+            }
+            
+            if (currentVolCandle.getVolume() >= targetVol) {
+                volCandles.add(currentVolCandle);
+                currentVolCandle = null;
+            }
+        }
+        
+        if (currentVolCandle != null) {
+            volCandles.add(currentVolCandle);
+        }
+        
+        calculateAndPopulateIndicators(volCandles, symbol, volumeInterval);
+        return volCandles;
     }
 
     public void syncAllSymbolsToRedis(com.algo.core.Engine engine) {
@@ -261,9 +293,9 @@ public class HistoricalDataService {
                     continue;
 
                 try {
-                    List<Candle> history = repository.getLatestCandles(symbol, tf, 3000);
+                    List<Candle> history = repository.getLatestCandles(symbol, tf, 2500);
                     if (history != null && !history.isEmpty()) {
-                        // Only seed the Strategy in-memory state (warm up EMAs).
+                        // Only seed the Strategy in-memory state (warm up EMAs & indicators).
                         // Do NOT re-calculate indicators or re-save to DB — those are already stored.
                         state.seedHistory(tf, history);
                     }
@@ -282,8 +314,6 @@ public class HistoricalDataService {
                 return "3minute";
             case "5min":
                 return "5minute";
-            case "15min":
-                return "15minute";
             default:
                 return null;
         }

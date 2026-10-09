@@ -97,15 +97,12 @@ export const LiveFeedProvider = ({ children }) => {
                     ema15_5: c.ema15Plus5,
                     ema15_15: c.ema15Plus15,
                     ema15_15_15: c.ema15Plus15Plus15,
-                    ema15_15_15_15: c.ema15Plus15Plus15Plus15,
-                    ema15_15_15_15_30: c.ema15Plus15Plus15Plus15Plus30,
                     stMa: c.stMa, stUp: c.stUp, stDn: c.stDn, stTrend: c.stTrend,
                     stMa2: c.stMa2, stUp2: c.stUp2, stDn2: c.stDn2, stTrend2: c.stTrend2,
-                    arcValue: c.arcValue, arcTrend: c.arcTrend,
-                    arcFlipConfirmed: c.arcFlipConfirmed,
-                    vwapSession: c.vwapSession,
-                    vwapWeek: c.vwapWeek,
-                    vwapMonth: c.vwapMonth,
+                    haTrailingSl: c.haTrailingSl,
+                    haTrend: c.haTrend,
+                    htfTrailingSl: c.htfTrailingSl,
+                    htfTrend: c.htfTrend,
                 }
             };
         } catch (e) {
@@ -290,7 +287,8 @@ export const LiveFeedProvider = ({ children }) => {
             // Direct WS path — subscribe on the STOMP client
             if (entry.count === 1 && stompClientRef.current?.connected) {
                 entry.subObject = stompClientRef.current.subscribe(topic, (msg) => {
-                    const isProto = msg.headers?.['content-type'] === 'application/x-protobuf';
+                    const ct = msg.headers?.['content-type'];
+                    const isProto = ct === 'application/x-protobuf' || ct === 'application/octet-stream';
                     let data = null;
                     if (isProto && msg.binaryBody?.length > 0 && protoType) {
                         data = decodeProto(msg.binaryBody, protoType);
@@ -317,8 +315,45 @@ export const LiveFeedProvider = ({ children }) => {
         };
     }, [useSharedWorker, decodeProto, protoType]);
 
+    const subscribeTopic = useCallback((topic, callback) => {
+        if (!subscriptionsRef.current[topic]) {
+            subscriptionsRef.current[topic] = { count: 0, listeners: [], subObject: null };
+        }
+        const entry = subscriptionsRef.current[topic];
+        entry.count++;
+        entry.listeners.push(callback);
+
+        if (useSharedWorker) {
+            if (workerPortRef.current) {
+                workerPortRef.current.postMessage({ type: 'SUBSCRIBE', topic });
+            }
+        } else {
+            if (entry.count === 1 && stompClientRef.current?.connected) {
+                entry.subObject = stompClientRef.current.subscribe(topic, (msg) => {
+                    let data = null;
+                    try { data = JSON.parse(msg.body); } catch (_) {}
+                    if (data) entry.listeners.forEach(cb => cb(data));
+                });
+            }
+        }
+
+        return () => {
+            entry.count--;
+            entry.listeners = entry.listeners.filter(cb => cb !== callback);
+
+            if (entry.count <= 0) {
+                if (useSharedWorker) {
+                    workerPortRef.current?.postMessage({ type: 'UNSUBSCRIBE', topic });
+                } else {
+                    try { entry.subObject?.unsubscribe(); } catch (_) {}
+                }
+                delete subscriptionsRef.current[topic];
+            }
+        };
+    }, [useSharedWorker]);
+
     return (
-        <LiveFeedContext.Provider value={{ subscribe, registerSnapshotListener, status }}>
+        <LiveFeedContext.Provider value={{ subscribe, subscribeTopic, registerSnapshotListener, status }}>
             {children}
         </LiveFeedContext.Provider>
     );
@@ -352,4 +387,22 @@ export const useLiveFeed = (symbol, interval, onUpdate, onSnapshot) => {
     }, [context, symbol, interval]);
 
     return context?.status;
+};
+
+export const useTopicFeed = (topic, onUpdate) => {
+    const context = useContext(LiveFeedContext);
+    const callbackRef = useRef(onUpdate);
+
+    useEffect(() => { callbackRef.current = onUpdate; }, [onUpdate]);
+
+    useEffect(() => {
+        if (!context || !topic) return;
+
+        const stableCallback = (data) => {
+            if (callbackRef.current) callbackRef.current(data);
+        };
+        const unsubscribe = context.subscribeTopic(topic, stableCallback);
+
+        return () => unsubscribe();
+    }, [context, topic]);
 };

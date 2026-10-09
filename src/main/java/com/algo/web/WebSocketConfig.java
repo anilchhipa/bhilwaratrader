@@ -29,4 +29,19 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registration.setSendBufferSizeLimit(50 * 1024 * 1024); // 50MB
         registration.setSendTimeLimit(60000); // 60 seconds
     }
+
+    @Override
+    public boolean configureMessageConverters(java.util.List<org.springframework.messaging.converter.MessageConverter> messageConverters) {
+        org.springframework.messaging.converter.ByteArrayMessageConverter byteArrayConverter = new org.springframework.messaging.converter.ByteArrayMessageConverter() {
+            {
+                addSupportedMimeTypes(
+                    new org.springframework.util.MimeType("application", "x-protobuf"),
+                    org.springframework.util.MimeTypeUtils.APPLICATION_OCTET_STREAM,
+                    org.springframework.util.MimeTypeUtils.ALL
+                );
+            }
+        };
+        messageConverters.add(byteArrayConverter);
+        return false;
+    }
 }

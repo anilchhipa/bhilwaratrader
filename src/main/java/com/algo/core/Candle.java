@@ -8,14 +8,13 @@ public class Candle {
     private double low;
     private double close;
     private LocalDateTime timestamp;
+    private long cachedEpochMilli;
 
     // Indicator values (nullable)
     private Double ema15;
     private Double ema15_5;
     private Double ema15_15;
     private Double ema15_15_15;
-    private Double ema15_15_15_15;
-    private Double ema15_15_15_15_30; // 5th cascaded EMA (cascade5 period)
     private Double stMa;
     private Double stUp;
     private Double stDn;
@@ -28,13 +27,12 @@ public class Candle {
     private Integer stTrend2;
     private Double atr;
 
-    // Arc VWAP Supertrend
-    private Double arcValue; // smoothed arc line value
-    private Boolean arcTrend; // true = bullish, false = bearish
-    private Boolean arcFlipConfirmed; // true if flip confirmed by VWAP
-    private Double vwapSession; // daily VWAP
-    private Double vwapWeek; // weekly VWAP
-    private Double vwapMonth; // monthly VWAP
+    // SuperTrend MTF Heikin Ashi
+    private Double haTrailingSl;
+    private Integer haTrend;
+    private Double htfTrailingSl;
+    private Integer htfTrend;
+
 
     private Double volume;
 
@@ -45,6 +43,38 @@ public class Candle {
         this.close = close;
         this.volume = volume;
         this.timestamp = timestamp;
+        if (timestamp != null) {
+            this.cachedEpochMilli = timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        }
+    }
+
+    /** Fast copy constructor */
+    public Candle(Candle other) {
+        if (other == null) return;
+        this.open = other.open;
+        this.high = other.high;
+        this.low = other.low;
+        this.close = other.close;
+        this.volume = other.volume;
+        this.timestamp = other.timestamp;
+        this.cachedEpochMilli = other.cachedEpochMilli;
+        this.ema15 = other.ema15;
+        this.ema15_5 = other.ema15_5;
+        this.ema15_15 = other.ema15_15;
+        this.ema15_15_15 = other.ema15_15_15;
+        this.stMa = other.stMa;
+        this.stUp = other.stUp;
+        this.stDn = other.stDn;
+        this.stTrend = other.stTrend;
+        this.stMa2 = other.stMa2;
+        this.stUp2 = other.stUp2;
+        this.stDn2 = other.stDn2;
+        this.stTrend2 = other.stTrend2;
+        this.atr = other.atr;
+        this.haTrailingSl = other.haTrailingSl;
+        this.haTrend = other.haTrend;
+        this.htfTrailingSl = other.htfTrailingSl;
+        this.htfTrend = other.htfTrend;
     }
 
     public Double getVolume() {
@@ -93,6 +123,13 @@ public class Candle {
 
     public void setTimestamp(LocalDateTime timestamp) {
         this.timestamp = timestamp;
+        if (timestamp != null) {
+            this.cachedEpochMilli = timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        }
+    }
+
+    public long getEpochMilli() {
+        return cachedEpochMilli;
     }
 
     // Indicator Getters and Setters (Precision preserved to avoid zig-zagging)
@@ -126,22 +163,6 @@ public class Candle {
 
     public void setEma15_15_15(Double ema15_15_15) {
         this.ema15_15_15 = ema15_15_15;
-    }
-
-    public Double getEma15_15_15_15() {
-        return ema15_15_15_15;
-    }
-
-    public void setEma15_15_15_15(Double ema15_15_15_15) {
-        this.ema15_15_15_15 = ema15_15_15_15;
-    }
-
-    public Double getEma15_15_15_15_30() {
-        return ema15_15_15_15_30;
-    }
-
-    public void setEma15_15_15_15_30(Double ema15_15_15_15_30) {
-        this.ema15_15_15_15_30 = ema15_15_15_15_30;
     }
 
     public Double getStMa() {
@@ -216,52 +237,35 @@ public class Candle {
         this.atr = atr;
     }
 
-    public Double getArcValue() {
-        return arcValue;
+    public Double getHaTrailingSl() {
+        return haTrailingSl;
     }
 
-    public void setArcValue(Double arcValue) {
-        this.arcValue = arcValue;
+    public void setHaTrailingSl(Double haTrailingSl) {
+        this.haTrailingSl = haTrailingSl;
     }
 
-    public Boolean getArcTrend() {
-        return arcTrend;
+    public Integer getHaTrend() {
+        return haTrend;
     }
 
-    public void setArcTrend(Boolean arcTrend) {
-        this.arcTrend = arcTrend;
+    public void setHaTrend(Integer haTrend) {
+        this.haTrend = haTrend;
     }
 
-    public Boolean getArcFlipConfirmed() {
-        return arcFlipConfirmed;
+    public Double getHtfTrailingSl() {
+        return htfTrailingSl;
     }
 
-    public void setArcFlipConfirmed(Boolean arcFlipConfirmed) {
-        this.arcFlipConfirmed = arcFlipConfirmed;
+    public void setHtfTrailingSl(Double htfTrailingSl) {
+        this.htfTrailingSl = htfTrailingSl;
     }
 
-    public Double getVwapSession() {
-        return vwapSession;
+    public Integer getHtfTrend() {
+        return htfTrend;
     }
 
-    public void setVwapSession(Double vwapSession) {
-        this.vwapSession = vwapSession;
+    public void setHtfTrend(Integer htfTrend) {
+        this.htfTrend = htfTrend;
     }
-
-    public Double getVwapWeek() {
-        return vwapWeek;
-    }
-
-    public void setVwapWeek(Double vwapWeek) {
-        this.vwapWeek = vwapWeek;
-    }
-
-    public Double getVwapMonth() {
-        return vwapMonth;
-    }
-
-    public void setVwapMonth(Double vwapMonth) {
-        this.vwapMonth = vwapMonth;
-    }
-
 }

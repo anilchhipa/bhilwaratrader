@@ -27,15 +27,30 @@ function App() {
   const [mainTab, setMainTab] = useState(() => localStorage.getItem('main_tab') || 'SCANNER');
   const [pageIndex, setPageIndex] = useState(0);
   const [maximizedChart, setMaximizedChart] = useState(null);
+
+  const handleMaximizeToggle = useCallback((chartData) => {
+    setMaximizedChart(chartData);
+  }, []);
+  const handleChartMaximize = useCallback((tf, sym) => {
+    setMaximizedChart({ sym, tf });
+  }, []);
+  const handleCloseMaximize = useCallback(() => {
+    setMaximizedChart(null);
+  }, []);
+  const NOOP = useCallback(() => { }, []);
   const [highlightedSymbol, setHighlightedSymbol] = useState(null);
   const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('scanner_grid_layout') || '2x4');
-  const [isZenMode, setIsZenMode] = useState(false);
-  const [cpTf, setCpTf] = useState(() => localStorage.getItem('cp_tf') || '3min');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cpTf, setCpTf] = useState(() => {
+    const saved = localStorage.getItem('cp_tf');
+    return (saved && saved !== '15min') ? saved : '3min';
+  });
   const [cpSelectedCE, setCpSelectedCE] = useState(() => localStorage.getItem('cp_selected_ce') || null);
   const [cpSelectedPE, setCpSelectedPE] = useState(() => localStorage.getItem('cp_selected_pe') || null);
   const [cpCeOpen, setCpCeOpen] = useState(false);
   const [cpPeOpen, setCpPeOpen] = useState(false);
-  const isZenModeRef = useRef(false); // Ref so keydown handler never captures a stale value
+  const [mobileTfOpen, setMobileTfOpen] = useState(false);
+  const [mobileCatOpen, setMobileCatOpen] = useState(false);
 
   const [activeWidgets, setActiveWidgets] = useState({
     manage: false,
@@ -51,19 +66,7 @@ function App() {
     return () => broadcastRef.current?.close();
   }, []);
 
-  // --- Harmonic Sync Logic (1, 3, 5, 15 min alignment) ---
-  const [syncSeconds, setSyncSeconds] = useState(0);
-  useEffect(() => {
-    const update = () => {
-      const now = new Date();
-      const totalSecs = now.getMinutes() * 60 + now.getSeconds();
-      const nextSync = Math.ceil((totalSecs + 1) / 900) * 900;
-      setSyncSeconds(nextSync - totalSecs);
-    };
-    update();
-    const inv = setInterval(update, 1000);
-    return () => clearInterval(inv);
-  }, []);
+
 
   const toggleWidget = (id) => setActiveWidgets(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -99,16 +102,19 @@ function App() {
   // Visibility State for Technical Indicators
   const [visibility, setVisibility] = useState(() => {
     const defaults = {
-      EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true, EMA15_15_15_15: true,
-      EMA15_15_15_15_30: true, CLOUD: true, CLOUD2: true, ARC_VWAP: true
+      EMA15: true, EMA15_5: true, EMA15_15: true, EMA15_15_15: true,
+      CLOUD: true, CLOUD2: true,
+      RENKO2: false, RENKO3: false, RENKO_CLOSE: false,
+      ST_HA_CURRENT: false, ST_HA_HTF: false, ST_HA_FLIPS: false
     };
     const saved = localStorage.getItem('chartVisibility');
     let finalVisibility = defaults;
     if (saved) {
       const parsed = JSON.parse(saved);
+      delete parsed.EMA15_15_15_15;
+      delete parsed.EMA15_15_15_15_30;
       finalVisibility = { ...defaults, ...parsed };
     }
-    console.log("Chart Audit: Indicator Visibility State ->", finalVisibility);
     return finalVisibility;
   });
 
@@ -233,16 +239,88 @@ function App() {
 
   const handleGlobalReset = () => setGlobalResetTrigger(Date.now());
 
+  // Native Browser Fullscreen (hides browser address bar on mobile & desktop)
+  const requestAppFullscreen = async () => {
+    try {
+      const el = document.documentElement;
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+      } else if (el.mozRequestFullScreen) {
+        await el.mozRequestFullScreen();
+      } else if (el.msRequestFullscreen) {
+        await el.msRequestFullscreen();
+      }
+    } catch (err) {
+      console.warn('Native fullscreen request:', err);
+    }
+  };
+
+  const exitAppFullscreen = async () => {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          await document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          await document.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Native exit fullscreen:', err);
+    }
+  };
+
+  const toggleFullscreen = useCallback(() => {
+    const isFs = Boolean(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement
+    );
+    if (isFs) {
+      exitAppFullscreen();
+    } else {
+      requestAppFullscreen();
+    }
+  }, []);
+
+  // Sync state if user enters/exits browser native fullscreen (e.g. Esc key, F11, or mobile gestures)
+  useEffect(() => {
+    const handleFsChange = () => {
+      const isFs = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      setIsFullscreen(isFs);
+    };
+
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+    document.addEventListener('MSFullscreenChange', handleFsChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('MSFullscreenChange', handleFsChange);
+    };
+  }, []);
+
   // Global Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Escape Priority: 1. Close Maximized 2. Exit Zen 3. Global Reset
+      // Escape Priority: 1. Close Maximized 2. Global Reset
       if (e.key === 'Escape') {
         if (maximizedChart) {
           setMaximizedChart(null);
-        } else if (isZenModeRef.current) {
-          setIsZenMode(false);
-          isZenModeRef.current = false;
         } else {
           handleGlobalReset();
         }
@@ -251,6 +329,12 @@ function App() {
       if (e.shiftKey && (e.key === 'R' || e.key === 'r')) {
         e.preventDefault();
         handleGlobalReset();
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setIsSearchOpen(true);
+        return;
       }
 
       // Ignore if user is typing in an input or textarea
@@ -292,7 +376,7 @@ function App() {
           const currentZoom = parseInt(localStorage.getItem('chart_zoom_global')) || 160;
           const newZoom = Math.max(20, Math.round(currentZoom * 0.8)); // zoom in (fewer bars)
           localStorage.setItem('chart_zoom_global', newZoom);
-          ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
+          ['1min', '3min', '5min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
           broadcastRef.current?.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
           break;
         }
@@ -300,7 +384,7 @@ function App() {
           const currentZoom = parseInt(localStorage.getItem('chart_zoom_global')) || 160;
           const newZoom = Math.min(800, Math.round(currentZoom * 1.25)); // zoom out (more bars)
           localStorage.setItem('chart_zoom_global', newZoom);
-          ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
+          ['1min', '3min', '5min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, newZoom));
           broadcastRef.current?.postMessage({ type: 'SYNC_ZOOM', count: newZoom });
           break;
         }
@@ -316,12 +400,8 @@ function App() {
           setScannerTfWithRef('5min');
           setPageIndex(0);
           break;
-        case '4':
-          setScannerTfWithRef('15min');
-          setPageIndex(0);
-          break;
         case 't': case 'T': {
-          const tfs = ['1min', '3min', '5min', '15min'];
+          const tfs = ['1min', '3min', '5min'];
           const currentTf = scannerTfRef.current || '3min';
           const nextIndex = (tfs.indexOf(currentTf) + 1) % tfs.length;
           setScannerTfWithRef(tfs[nextIndex]);
@@ -329,11 +409,7 @@ function App() {
           break;
         }
         case 'z': case 'Z':
-          setIsZenMode(prev => {
-            const next = !prev;
-            isZenModeRef.current = next;
-            return next;
-          });
+          toggleFullscreen();
           break;
         default:
           break;
@@ -361,65 +437,108 @@ function App() {
         <div className="main-content">
           <main className="chart-section no-sidebar">
             <div className="scanner-view-container">
-              <div className="scanner-header sticky-header" style={{ display: isZenMode ? 'none' : 'flex' }}>
-                {/* Header Left: Logo + Main Tab Switch */}
+              <div className="scanner-header sticky-header">
+                {/* Header Left: Main Tab Switch (SC / CP) */}
                 <div className="header-left">
-                  <div className="brand-logo" style={{ display: 'flex', alignItems: 'center', gap: '0px', userSelect: 'none' }}>
-                    <span style={{ fontFamily: '"Dancing Script", cursive', fontSize: '22px', fontWeight: '700', color: '#f8fafc', letterSpacing: '0.5px' }}>Bhilwara</span>
-                    <span style={{ fontFamily: '"Dancing Script", cursive', fontSize: '22px', fontWeight: '700', color: '#fbbf24', letterSpacing: '0.5px', marginLeft: '6px' }}>trader</span>
+                  <div className="main-tab-switcher" style={{ display: 'flex', gap: '3px', background: 'rgba(0,0,0,0.45)', padding: '3px', borderRadius: '9px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <button
+                      className={`tf-tab ${mainTab === 'SCANNER' ? 'active' : ''}`}
+                      onClick={() => setMainTabPersist('SCANNER')}
+                      title="Scanner (SC)"
+                      style={{ fontSize: '10px', padding: '3px 8px', minWidth: '32px', letterSpacing: '0.5px', fontWeight: '800' }}
+                    >SC</button>
+                    <button
+                      className={`tf-tab ${mainTab === 'CP' ? 'active' : ''}`}
+                      onClick={() => setMainTabPersist('CP')}
+                      title="Calls & Puts (CP)"
+                      style={{
+                        fontSize: '10px', padding: '3px 8px', minWidth: '32px', letterSpacing: '0.5px', fontWeight: '800',
+                        background: mainTab === 'CP' ? 'linear-gradient(135deg, #10b981, #3b82f6)' : 'transparent',
+                        color: mainTab === 'CP' ? '#fff' : '#94a3b8',
+                        boxShadow: mainTab === 'CP' ? '0 0 14px rgba(16,185,129,0.3)' : 'none',
+                      }}
+                    >CP</button>
                   </div>
-                </div>
-
-                {/* Main Tab Switcher */}
-                <div className="main-tab-switcher" style={{ display: 'flex', gap: '3px', background: 'rgba(0,0,0,0.45)', padding: '3px', borderRadius: '9px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <button
-                    className={`tf-tab ${mainTab === 'SCANNER' ? 'active' : ''}`}
-                    onClick={() => setMainTabPersist('SCANNER')}
-                    style={{ fontSize: '9px', padding: '3px 10px', minWidth: '52px', letterSpacing: '0.5px' }}
-                  >SCANNER</button>
-                  <button
-                    className={`tf-tab ${mainTab === 'CP' ? 'active' : ''}`}
-                    onClick={() => setMainTabPersist('CP')}
-                    style={{
-                      fontSize: '9px', padding: '3px 10px', minWidth: '52px', letterSpacing: '0.5px',
-                      background: mainTab === 'CP' ? 'linear-gradient(135deg, #10b981, #3b82f6)' : 'transparent',
-                      color: mainTab === 'CP' ? '#fff' : '#94a3b8',
-                      boxShadow: mainTab === 'CP' ? '0 0 14px rgba(16,185,129,0.3)' : 'none',
-                    }}
-                  >C &amp; P</button>
                 </div>
 
                 {/* Header Center: Navigation & Categories */}
                 <div className="header-center">
-                  {mainTab === 'SCANNER' && !maximizedChart && (
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                      <div className="scanner-tf-selector" style={{ margin: 0 }}>
-                        {['1min', '3min', '5min', '15min'].map(tf => (
-                          <button
-                            key={tf}
-                            className={`tf-tab ${scannerTf === tf ? 'active' : ''}`}
-                            onClick={() => { setScannerTfWithRef(tf); setPageIndex(0); }}
-                          >
-                            {tf.replace('min', 'M').toUpperCase()}
-                          </button>
-                        ))}
+                  {mainTab === 'SCANNER' && (
+                    <>
+                      {/* Desktop Timeframe Buttons */}
+                      <div className="desktop-only-header" style={{ display: 'flex', gap: '4px' }}>
+                        <div className="scanner-tf-selector" style={{ margin: 0 }}>
+                          {['1min', '3min', '5min'].map(tf => (
+                            <button
+                              key={tf}
+                              className={`tf-tab ${scannerTf === tf ? 'active' : ''}`}
+                              onClick={() => { setScannerTfWithRef(tf); setPageIndex(0); }}
+                            >
+                              {tf.replace('min', 'M').toUpperCase()}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+
+                      {/* Mobile Timeframe Dropdown Pill */}
+                      <div className="mobile-only-header" style={{ position: 'relative' }}>
+                        <button
+                          className="mobile-header-pill"
+                          onClick={() => { setMobileTfOpen(o => !o); setMobileCatOpen(false); }}
+                        >
+                          <span>{scannerTf.replace('min', 'M').toUpperCase()}</span>
+                          <span className="pill-arrow">{mobileTfOpen ? '▲' : '▼'}</span>
+                        </button>
+                        {mobileTfOpen && (
+                          <>
+                            <div onClick={() => setMobileTfOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                            <div className="mobile-dropdown-menu">
+                              {['1min', '3min', '5min'].map(tf => (
+                                <button
+                                  key={tf}
+                                  className={`mobile-dropdown-item ${scannerTf === tf ? 'active' : ''}`}
+                                  onClick={() => { setScannerTfWithRef(tf); setPageIndex(0); setMobileTfOpen(false); }}
+                                >
+                                  <span>{tf.replace('min', 'M').toUpperCase()}</span>
+                                  {scannerTf === tf && <span style={{ color: '#fbbf24' }}>✓</span>}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </>
                   )}
 
                   {mainTab === 'CP' && (
-                      <div style={{ position: 'relative', flexShrink: 0 }}>
-                        <button onClick={() => { setCpCeOpen(o => !o); setCpPeOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: cpCeOpen ? 'rgba(16,185,129,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpCeOpen ? 'rgba(16,185,129,0.5)' : 'rgba(16,185,129,0.25)'}`, borderRadius: '7px', padding: '3px 8px', height: '24px', cursor: 'pointer' }}>
-                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>{cpActiveCE ? (cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/) ? `${cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/)[1]} CE` : 'SELECT') : 'SELECT CE'}</span>
-                          {cpActiveCE && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: symbolPrices[cpActiveCE]?.isGreen ? '#10b981' : '#f87171' }}> - {symbolPrices[cpActiveCE]?.price?.toFixed(2) ?? ''}</span>}
-                          <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '2px' }}>{cpCeOpen ? '▲' : '▼'}</span>
-                        </button>
-                        {cpCeOpen && (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button
+                        onClick={() => { setCpCeOpen(o => !o); setCpPeOpen(false); }}
+                        title={cpActiveCE ? `${cpActiveCE} (${symbolPrices[cpActiveCE]?.price?.toFixed(2) ?? ''})` : 'Select Call'}
+                        style={{ display: 'flex', alignItems: 'center', gap: '3px', background: cpCeOpen ? 'rgba(16,185,129,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpCeOpen ? 'rgba(16,185,129,0.5)' : 'rgba(16,185,129,0.25)'}`, borderRadius: '7px', padding: '3px 7px', height: '24px', cursor: 'pointer' }}
+                      >
+                        {cpActiveCE ? (
                           <>
-                            <div onClick={() => setCpCeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
-                            <div style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
-                              <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#10b981', letterSpacing: '1px' }}>SELECT CALL</span></div>
-                              {cpCallsSorted.map(sym => { const ltp = symbolPrices[sym]; const active = sym === cpActiveCE; return (
+                            <span className="cp-pill-strike">{cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/) ? `${cpActiveCE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)CE$/)[1]} CE` : cpActiveCE}</span>
+                            <span className="cp-pill-dash">&nbsp;-&nbsp;</span>
+                            <span className="cp-pill-price" style={{ color: symbolPrices[cpActiveCE]?.isGreen ? '#10b981' : '#f87171' }}>
+                              {symbolPrices[cpActiveCE]?.price?.toFixed(2) ?? '--'}
+                            </span>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>
+                            <span className="cp-pill-strike">SELECT </span>CE
+                          </span>
+                        )}
+                        <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '1px' }}>{cpCeOpen ? '▲' : '▼'}</span>
+                      </button>
+                      {cpCeOpen && (
+                        <>
+                          <div onClick={() => setCpCeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                          <div style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
+                            <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#10b981', letterSpacing: '1px' }}>SELECT CALL</span></div>
+                            {cpCallsSorted.map(sym => {
+                              const ltp = symbolPrices[sym]; const active = sym === cpActiveCE; return (
                                 <div key={sym} onClick={() => { setCpSelectedCE(sym); setCpCeOpen(false); }}
                                   style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px', cursor: 'pointer', background: active ? 'rgba(16,185,129,0.12)' : 'transparent', borderLeft: active ? '2px solid #10b981' : '2px solid transparent' }}
                                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
@@ -429,72 +548,103 @@ function App() {
                                   {ltp && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: ltp.isGreen ? '#10b981' : '#f87171', minWidth: '50px', textAlign: 'right' }}>{ltp.price?.toFixed(2)}</span>}
                                   {active && <span style={{ fontSize: '9px', color: '#10b981' }}>✓</span>}
                                 </div>
-                              ); })}
-                              {cpCallsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No calls</div>}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                  )}
-
-                  {mainTab === 'CP' && (
-                    <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                      <div className="scanner-tf-selector" style={{ margin: 0 }}>
-                        {['1min', '3min', '5min', '15min'].map(tf => (
-                          <button
-                            key={tf}
-                            className={`tf-tab ${cpTf === tf ? 'active' : ''}`}
-                            onClick={() => setCpTfPersist(tf)}
-                          >
-                            {tf.replace('min', 'M').toUpperCase()}
-                          </button>
-                        ))}
-                      </div>
+                              );
+                            })}
+                            {cpCallsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No calls</div>}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
 
-
+                  {mainTab === 'CP' && (
+                    <div className="scanner-tf-selector cp-tf-selector" style={{ margin: 0, flexShrink: 0 }}>
+                      {['1min', '3min', '5min'].map(tf => (
+                        <button
+                          key={tf}
+                          className={`tf-tab ${cpTf === tf ? 'active' : ''}`}
+                          onClick={() => setCpTfPersist(tf)}
+                        >
+                          {tf.replace('min', 'M').toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   {mainTab === 'SCANNER' && (
                     <>
                       {/* Page Navigation */}
-                      <div className="scanner-tf-selector page-nav-box" style={{ margin: 0, justifyContent: 'space-between', gap: '2px' }}>
+                      <div className={`scanner-tf-selector page-nav-box ${maxPages <= 1 ? 'hide-single-page-mobile' : ''}`} style={{ margin: 0, justifyContent: 'space-between', gap: '2px' }}>
                         <button disabled={pageIndex === 0} onClick={() => setPageIndex(p => p - 1)} className="tf-tab" data-tooltip="Previous Page" style={{ cursor: pageIndex === 0 ? 'not-allowed' : 'pointer', opacity: pageIndex === 0 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>◀</button>
                         <span className="page-label" style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '0.4px', padding: '0 4px' }}>PAGE {pageIndex + 1}/{maxPages || 1}</span>
                         <span className="page-label-small" style={{ display: 'none', color: '#cbd5e1', fontSize: '10px', fontWeight: '900', alignItems: 'center', justifyContent: 'center' }}>{pageIndex + 1}/{maxPages || 1}</span>
                         <button disabled={pageIndex >= maxPages - 1} onClick={() => setPageIndex(p => p + 1)} className="tf-tab" data-tooltip="Next Page" style={{ cursor: pageIndex >= maxPages - 1 ? 'not-allowed' : 'pointer', opacity: pageIndex >= maxPages - 1 ? 0.3 : 1, padding: '2px', minWidth: '18px', height: '18px' }}>▶</button>
                       </div>
 
-                      <div className="scanner-category-tabs" style={{ margin: 0 }}>
-                        {Object.keys(scannerCategories).map(cat => {
-                          const labels = { INDEX: 'IN', STOCKS: 'ST', FUTURES: 'FU', CALLS: 'CL', PUTS: 'PT' };
-                          return (
-                            <button
-                              key={cat}
-                              className={`cat-tab ${scannerCategory === cat ? 'active' : ''}`}
-                              onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); }}
-                            >
-                              {labels[cat] || cat} <span className="cat-count">({scannerCategories[cat].length})</span>
-                            </button>
-                          );
-                        })}
+                      {/* Category Dropdown Pill */}
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          className="mobile-header-pill"
+                          onClick={() => { setMobileCatOpen(o => !o); setMobileTfOpen(false); }}
+                          title="Select Category"
+                        >
+                          <span>{{ INDEX: 'IN', STOCKS: 'ST', FUTURES: 'FU', CALLS: 'CL', PUTS: 'PT' }[scannerCategory] || scannerCategory}</span>
+                          <span className="pill-arrow">{mobileCatOpen ? '▲' : '▼'}</span>
+                        </button>
+                        {mobileCatOpen && (
+                          <>
+                            <div onClick={() => setMobileCatOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                            <div className="mobile-dropdown-menu">
+                              {Object.keys(scannerCategories).map(cat => {
+                                const labels = { INDEX: 'INDEX', STOCKS: 'STOCKS', FUTURES: 'FUTURES', CALLS: 'CALLS', PUTS: 'PUTS' };
+                                const active = scannerCategory === cat;
+                                return (
+                                  <button
+                                    key={cat}
+                                    className={`mobile-dropdown-item ${active ? 'active' : ''}`}
+                                    onClick={() => { setScannerCategoryWithRef(cat); setPageIndex(0); setMobileCatOpen(false); }}
+                                  >
+                                    <span>{labels[cat] || cat} ({scannerCategories[cat]?.length || 0})</span>
+                                    {active && <span style={{ color: '#fbbf24' }}>✓</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
                       </div>
                     </>
                   )}
 
                   {mainTab === 'CP' && (
-                      <div style={{ position: 'relative', flexShrink: 0 }}>
-                        <button onClick={() => { setCpPeOpen(o => !o); setCpCeOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: cpPeOpen ? 'rgba(239,68,68,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpPeOpen ? 'rgba(239,68,68,0.5)' : 'rgba(239,68,68,0.25)'}`, borderRadius: '7px', padding: '3px 8px', height: '24px', cursor: 'pointer' }}>
-                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>{cpActivePE ? (cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/) ? `${cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/)[1]} PE` : 'SELECT') : 'SELECT PE'}</span>
-                          {cpActivePE && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: symbolPrices[cpActivePE]?.isGreen ? '#10b981' : '#f87171' }}> - {symbolPrices[cpActivePE]?.price?.toFixed(2) ?? ''}</span>}
-                          <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '2px' }}>{cpPeOpen ? '▲' : '▼'}</span>
-                        </button>
-                        {cpPeOpen && (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button
+                        onClick={() => { setCpPeOpen(o => !o); setCpCeOpen(false); }}
+                        title={cpActivePE ? `${cpActivePE} (${symbolPrices[cpActivePE]?.price?.toFixed(2) ?? ''})` : 'Select Put'}
+                        style={{ display: 'flex', alignItems: 'center', gap: '3px', background: cpPeOpen ? 'rgba(239,68,68,0.18)' : 'rgba(0,0,0,0.35)', border: `1px solid ${cpPeOpen ? 'rgba(239,68,68,0.5)' : 'rgba(239,68,68,0.25)'}`, borderRadius: '7px', padding: '3px 7px', height: '24px', cursor: 'pointer' }}
+                      >
+                        {cpActivePE ? (
                           <>
-                            <div onClick={() => setCpPeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
-                            <div style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
-                              <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#f87171', letterSpacing: '1px' }}>SELECT PUT</span></div>
-                              {cpPutsSorted.map(sym => { const ltp = symbolPrices[sym]; const active = sym === cpActivePE; return (
+                            <span className="cp-pill-strike">{cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/) ? `${cpActivePE.match(/^.+?2[0-9][A-Z0-9]{3}(\d+)PE$/)[1]} PE` : cpActivePE}</span>
+                            <span className="cp-pill-dash">&nbsp;-&nbsp;</span>
+                            <span className="cp-pill-price" style={{ color: symbolPrices[cpActivePE]?.isGreen ? '#10b981' : '#f87171' }}>
+                              {symbolPrices[cpActivePE]?.price?.toFixed(2) ?? '--'}
+                            </span>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#e2e8f0', fontFamily: 'monospace' }}>
+                            <span className="cp-pill-strike">SELECT </span>PE
+                          </span>
+                        )}
+                        <span style={{ fontSize: '8px', color: '#64748b', marginLeft: '1px' }}>{cpPeOpen ? '▲' : '▼'}</span>
+                      </button>
+                      {cpPeOpen && (
+                        <>
+                          <div onClick={() => setCpPeOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1050 }} />
+                          <div style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, zIndex: 1100, background: '#141821', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '10px', padding: '6px 0', minWidth: '180px', maxHeight: '320px', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)' }}>
+                            <div style={{ padding: '4px 12px 6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '3px' }}><span style={{ fontSize: '9px', fontWeight: '900', color: '#f87171', letterSpacing: '1px' }}>SELECT PUT</span></div>
+                            {cpPutsSorted.map(sym => {
+                              const ltp = symbolPrices[sym]; const active = sym === cpActivePE; return (
                                 <div key={sym} onClick={() => { setCpSelectedPE(sym); setCpPeOpen(false); }}
                                   style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px', cursor: 'pointer', background: active ? 'rgba(239,68,68,0.12)' : 'transparent', borderLeft: active ? '2px solid #ef4444' : '2px solid transparent' }}
                                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
@@ -504,24 +654,42 @@ function App() {
                                   {ltp && <span style={{ fontSize: '11px', fontWeight: '900', fontFamily: 'monospace', color: ltp.isGreen ? '#10b981' : '#f87171', minWidth: '50px', textAlign: 'right' }}>{ltp.price?.toFixed(2)}</span>}
                                   {active && <span style={{ fontSize: '9px', color: '#ef4444' }}>✓</span>}
                                 </div>
-                              ); })}
-                              {cpPutsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No puts</div>}
-                            </div>
-                          </>
-                        )}
-                      </div>
+                              );
+                            })}
+                            {cpPutsSorted.length === 0 && <div style={{ padding: '12px', fontSize: '10px', color: '#475569', textAlign: 'center' }}>No puts</div>}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
 
                 </div>
 
                 {/* Header Right: Tools */}
                 <div className="header-right">
-                  <div className="scanner-tf-selector" style={{ margin: 0, padding: '3px 6px', gap: '8px', height: '28px' }}>
+                  <div className="scanner-tf-selector" style={{ margin: 0, padding: '3px 6px', gap: '6px', height: '28px' }}>
+                    <button
+                      className={`tf-tab ${isFullscreen ? 'active' : ''}`}
+                      onClick={toggleFullscreen}
+                      data-tooltip={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+                      style={{ padding: '0px', minWidth: '24px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
+                    >
+                      {isFullscreen ? (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                        </svg>
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                        </svg>
+                      )}
+                    </button>
+
                     <button
                       className={`tf-tab ${activeWidgets.manage ? 'active' : ''}`}
                       onClick={() => toggleWidget('manage')}
                       data-tooltip="Manage Symbols"
-                      style={{ padding: '0px', minWidth: '28px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
+                      style={{ padding: '0px', minWidth: '24px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -533,7 +701,7 @@ function App() {
                       className={`tf-tab ${activeWidgets.indicators ? 'active' : ''}`}
                       onClick={() => toggleWidget('indicators')}
                       data-tooltip="Configuration"
-                      style={{ padding: '0px', minWidth: '28px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
+                      style={{ padding: '0px', minWidth: '24px', height: '22px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderRadius: '6px' }}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -544,20 +712,20 @@ function App() {
                 </div>
               </div>
 
-              {mainTab === 'CP' ? (
-                <div className="cp-view-grid" style={{ gap: '4px', flex: 1, minHeight: 0, overflow: 'hidden', height: isZenMode ? 'calc(100vh - 10px)' : 'calc(100vh - 52px)', padding: '4px' }}>
+              {mainTab === 'CP' && !maximizedChart ? (
+                <div className="cp-view-grid" style={{ gap: '4px', flex: 1, minHeight: 0, overflow: 'hidden', padding: '0px 4px 4px 4px' }}>
 
                   {/* CALL side */}
                   <div className="cp-panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                     <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(16,185,129,0.12)', borderRadius: '8px', overflow: 'visible' }}>
-                      {cpActiveCE ? <CanvasTradingChart key={cpActiveCE} symbol={cpActiveCE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={tf => setMaximizedChart({ sym: cpActiveCE, tf })} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} symbolPrices={symbolPrices} onDelete={fetchAll} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📈</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Call above</span></div>}
+                      {cpActiveCE ? <CanvasTradingChart key={`cp_${cpActiveCE}`} symbol={cpActiveCE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={handleChartMaximize} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} onDelete={fetchAll} defaultShowRenko={false} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📈</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Call above</span></div>}
                     </div>
                   </div>
 
                   {/* PUT side */}
                   <div className="cp-panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                     <div style={{ flex: 1, minHeight: 0, border: '1px solid rgba(239,68,68,0.12)', borderRadius: '8px', overflow: 'visible' }}>
-                      {cpActivePE ? <CanvasTradingChart key={cpActivePE} symbol={cpActivePE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={tf => setMaximizedChart({ sym: cpActivePE, tf })} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} symbolPrices={symbolPrices} onDelete={fetchAll} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📉</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Put above</span></div>}
+                      {cpActivePE ? <CanvasTradingChart key={`cp_${cpActivePE}`} symbol={cpActivePE} initialInterval={cpTf} isGrid={true} externalVisibility={visibility} onVisibilityUpdate={setVisibility} globalResetTrigger={globalResetTrigger} onMaximize={handleChartMaximize} isMaximized={false} onPriceUpdate={handlePriceUpdate} themeColors={themeColors} onDelete={fetchAll} defaultShowRenko={false} /> : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: 0.4 }}><span style={{ fontSize: '22px' }}>📉</span><span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>Select a Put above</span></div>}
                     </div>
                   </div>
 
@@ -566,85 +734,89 @@ function App() {
                 <div className="maximized-active-layout-inline" style={{
                   flex: 1,
                   display: 'grid',
-                  gridTemplateColumns: '1fr 3fr',
-                  gridTemplateRows: 'repeat(2, 1fr)',
+                  gridTemplateColumns: window.innerWidth > 768 ? '1fr 3fr' : '1fr',
+                  gridTemplateRows: window.innerWidth > 768 ? 'repeat(2, 1fr)' : '1fr',
                   gap: '10px',
                   padding: '0',
                   background: '#020617',
-                  height: window.innerWidth > 768 ? (isZenMode ? 'calc(100vh - 20px)' : 'calc(100vh - 120px)') : 'auto',
-                  minHeight: 0
+                  minHeight: 0,
+                  overflow: 'hidden',
                 }}>
                   {/* Slot 1: NIFTY 50 Anchor */}
-                  <div className="anchor-slot" style={{ gridRow: '1 / 2', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
-                    <CanvasTradingChart
-                      symbol="NIFTY 50"
-                      initialInterval={maximizedChart.tf}
-                      isGrid={true}
-                      externalVisibility={visibility}
-                      onVisibilityUpdate={setVisibility}
-                      onMaximize={() => { }}
-                      isMaximized={false}
-                      onPriceUpdate={handlePriceUpdate}
-                      themeColors={themeColors}
-                      symbolPrices={symbolPrices}
-                      hideMaximize={true}
-                      globalResetTrigger={globalResetTrigger}
-                    />
-                  </div>
+                  {window.innerWidth > 768 && (
+                    <div className="anchor-slot" style={{ gridRow: '1 / 2', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
+                      <CanvasTradingChart
+                        symbol="NIFTY 50"
+                        initialInterval={maximizedChart.tf}
+                        isGrid={true}
+                        externalVisibility={visibility}
+                        onVisibilityUpdate={setVisibility}
+                        onMaximize={NOOP}
+                        isMaximized={false}
+                        onPriceUpdate={handlePriceUpdate}
+                        themeColors={themeColors}
+                        hideMaximize={true}
+                        globalResetTrigger={globalResetTrigger}
+                      />
+                    </div>
+                  )}
 
                   {/* Slot 5: SENSEX Anchor */}
-                  <div className="anchor-slot" style={{ gridRow: '2 / 3', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
-                    <CanvasTradingChart
-                      symbol="SENSEX"
-                      initialInterval={maximizedChart.tf}
-                      isGrid={true}
-                      externalVisibility={visibility}
-                      onVisibilityUpdate={setVisibility}
-                      onMaximize={() => { }}
-                      isMaximized={false}
-                      onPriceUpdate={handlePriceUpdate}
-                      themeColors={themeColors}
-                      symbolPrices={symbolPrices}
-                      hideMaximize={true}
-                      globalResetTrigger={globalResetTrigger}
-                    />
-                  </div>
+                  {window.innerWidth > 768 && (
+                    <div className="anchor-slot" style={{ gridRow: '2 / 3', gridColumn: '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(148, 163, 184, 0.1)', height: '100%', minHeight: 0 }}>
+                      <CanvasTradingChart
+                        symbol="SENSEX"
+                        initialInterval={maximizedChart.tf}
+                        isGrid={true}
+                        externalVisibility={visibility}
+                        onVisibilityUpdate={setVisibility}
+                        onMaximize={NOOP}
+                        isMaximized={false}
+                        onPriceUpdate={handlePriceUpdate}
+                        themeColors={themeColors}
+                        hideMaximize={true}
+                        globalResetTrigger={globalResetTrigger}
+                      />
+                    </div>
+                  )}
 
                   {/* Main Area: The Maximized Chart */}
-                  <div className="main-max-slot" style={{ gridRow: '1 / 3', gridColumn: '2 / 3', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 20px rgba(0,0,0,0.5)' }}>
+                  <div className="main-max-slot" style={{ gridRow: window.innerWidth > 768 ? '1 / 3' : '1 / 2', gridColumn: window.innerWidth > 768 ? '2 / 3' : '1 / 2', borderRadius: '6px', overflow: 'visible', border: '1px solid rgba(59, 130, 246, 0.3)', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative', height: '100%', minHeight: 0 }}>
                     <CanvasTradingChart
+                      key={maximizedChart.sym}
                       symbol={maximizedChart.sym}
                       initialInterval={maximizedChart.tf}
                       isGrid={false}
                       externalVisibility={visibility}
                       onVisibilityUpdate={setVisibility}
-                      onMaximize={() => setMaximizedChart(null)}
+                      onMaximize={handleCloseMaximize}
                       onIntervalChange={(newTf) => setMaximizedChart(p => ({ ...p, tf: newTf }))}
                       globalResetTrigger={globalResetTrigger}
                       isMaximized={true}
                       onPriceUpdate={handlePriceUpdate}
                       themeColors={themeColors}
-                      symbolPrices={symbolPrices}
                       onDelete={fetchAll}
                     />
+
+                    {/* CP maximized: header dropdowns above handle CE/PE switching */}
                   </div>
                 </div>
               ) : (
                 <div className={`charts-grid matrix-${gridLayout}`}>
                   {currentScannerSlots.map((slot, idx) => (
-                    <div key={`${slot.sym}-${idx}`} className="grid-chart-item">
+                    <div key={slot.sym} className="grid-chart-item">
                       <CanvasTradingChart
+                        key={slot.sym}
                         symbol={slot.sym}
                         initialInterval={scannerTf}
                         isGrid={true}
                         externalVisibility={visibility}
                         onVisibilityUpdate={setVisibility}
                         globalResetTrigger={globalResetTrigger}
-                        onMaximize={(tf) => setMaximizedChart({ sym: slot.sym, tf })}
+                        onMaximize={handleChartMaximize}
                         isMaximized={false}
                         onPriceUpdate={handlePriceUpdate}
                         themeColors={themeColors}
-                        symbolPrices={symbolPrices}
                         isHighlighted={highlightedSymbol === slot.sym}
                         onDelete={fetchAll}
                       />

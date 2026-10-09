@@ -14,19 +14,21 @@ import org.slf4j.LoggerFactory;
 public class SymbolState {
     private static final Logger logger = LoggerFactory.getLogger(SymbolState.class);
     private final String symbol;
-    private final String[] timeframes = { "1min", "3min", "5min", "15min" };
+    // Volume candles (10kV, 50kV) commented out — they are rebuilt from 1-min bars
+    // on every startup which causes live vs after-market discrepancies. Re-add when
+    // a proper tick-accurate persistence layer is in place.
+    public static final String[] TIMEFRAMES = { "1min", "3min", "5min" /* , "10kV", "50kV" */ };
     private final IndicatorConfig indicatorConfig;
 
     // Timeframe -> List of historical Candles (The "Hot Buffer")
     private final Map<String, java.util.List<Candle>> historyBuffers = new ConcurrentHashMap<>();
 
-    // Per-timeframe candle limits — tuned so each timeframe holds ~5 trading days
-    // without bloating RAM for higher timeframes that need far fewer candles.
+    // Per-timeframe candle limits — tuned so each timeframe holds ~6-10 trading days
+    // in RAM without exhausting heap memory.
     private static final java.util.Map<String, Integer> MAX_HOT_CANDLES = java.util.Map.of(
-        "1min",  2000,  // ~5.3 trading days  (375 candles/day)
-        "3min",  800,   // ~6.4 trading days
-        "5min",  500,   // ~6.6 trading days
-        "15min", 200    // ~8 trading days
+        "1min",  2500,  // ~6.6 trading days (375 candles/day)
+        "3min",  1200,  // ~9.6 trading days (125 candles/day)
+        "5min",  800    // ~10.6 trading days (75 candles/day)
     );
 
     // Per-timeframe locks for fine-grained concurrency (avoids one global
@@ -57,6 +59,14 @@ public class SymbolState {
     private final Map<String, Integer> confirmedTrendMap1 = new ConcurrentHashMap<>();
     private final Map<String, Integer> confirmedTrendMap2 = new ConcurrentHashMap<>();
 
+
+    // ── API Optimization Caches ──────────────────────────────────────────────
+    // Updated lock-free on every tick. Prevents TradingController from allocating
+    // thousands of HashMaps on every /matrix or /monitor/all polling request.
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> stTrendByTfCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> stTrend2ByTfCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> emaBiasByTfCache = new java.util.concurrent.ConcurrentHashMap<>();
+
     @FunctionalInterface
     public interface CandleCompleteListener {
         void onComplete(String symbol, String timeframe, Candle candle);
@@ -71,15 +81,17 @@ public class SymbolState {
     private CandleCompleteListener onCandleComplete;
     private TrendFlipListener onTrendFlip;
 
-    public SymbolState(String symbol, CandleCompleteListener onCandleComplete, TrendFlipListener onTrendFlip,
-            IndicatorConfig indicatorConfig) {
+    public SymbolState(String symbol, CandleCompleteListener onCandleComplete, TrendFlipListener onTrendFlip, IndicatorConfig indicatorConfig) {
         this.symbol = symbol;
         this.onCandleComplete = onCandleComplete;
         this.onTrendFlip = onTrendFlip;
         this.indicatorConfig = indicatorConfig;
-        for (String tf : timeframes) {
+        
+
+        
+        for (String tf : TIMEFRAMES) {
             indicatorValues.put(tf, new ConcurrentHashMap<>());
-            strategies.put(tf, new Strategy(indicatorConfig));
+            strategies.put(tf, new Strategy(indicatorConfig, tf));
             historyBuffers.put(tf, java.util.Collections.synchronizedList(new java.util.ArrayList<>()));
             tfLocks.put(tf, new ReentrantLock());
         }
@@ -91,19 +103,28 @@ public class SymbolState {
      * Returns the set of timeframes that were actually modified (for selective
      * broadcast).
      */
-    public java.util.Set<String> update(double price, double quantity, java.time.LocalDateTime time) {
-        java.util.Set<String> dirty = new java.util.HashSet<>(4);
-        for (String tf : timeframes) {
+    public int update(double price, double quantity, java.time.LocalDateTime time) {
+        int dirty = 0;
+        
+        long epochMillis = System.currentTimeMillis();
+        
+
+        
+        for (int i = 0; i < TIMEFRAMES.length; i++) {
+            String tf = TIMEFRAMES[i];
             ReentrantLock lock = tfLocks.get(tf);
             lock.lock();
             try {
                 if (updateTimeframe(tf, price, quantity, time)) {
-                    dirty.add(tf);
+                    dirty |= (1 << i);
                 }
             } finally {
                 lock.unlock();
             }
         }
+
+
+
         return dirty;
     }
 
@@ -117,12 +138,37 @@ public class SymbolState {
             return;
         }
 
-        // Find the most recent candle that has indicator data
+
+
+        // Warm up Supertrend MTF Heikin Ashi on all historical candles so chart history and live stream are aligned
+        if (strategy.getStHa() != null) {
+            java.util.List<com.algo.indicators.SupertrendMtfHeikinAshi.SupertrendPoint> haPoints =
+                    com.algo.indicators.SupertrendMtfHeikinAshi.calculate(historicalCandles, tf);
+            if (haPoints != null && !haPoints.isEmpty()) {
+                for (int i = 0; i < historicalCandles.size() && i < haPoints.size(); i++) {
+                    Candle c = historicalCandles.get(i);
+                    com.algo.indicators.SupertrendMtfHeikinAshi.SupertrendPoint pt = haPoints.get(i);
+                    c.setHaTrailingSl(pt.trailingSl);
+                    c.setHaTrend(pt.trend);
+                    c.setHtfTrailingSl(pt.htfTrailingSl);
+                    c.setHtfTrend(pt.htfTrend);
+                }
+                com.algo.indicators.SupertrendMtfHeikinAshi.SupertrendPoint lastHaPt = haPoints.get(haPoints.size() - 1);
+                // Prime the streaming instance directly without re-executing 50,000 updates and snapshots
+                strategy.getStHa().adoptState(lastHaPt, haPoints);
+            }
+        }
+
+
+        // Find the most recent candle that has indicator data, capturing its index
+        // in a single backward pass so we don't need a second O(N) indexOf() call later.
         Candle bestPrimal = null;
+        int bestPrimalIdx = -1;
         for (int i = historicalCandles.size() - 1; i >= 0; i--) {
             Candle c = historicalCandles.get(i);
             if (c.getEma15() != null && c.getEma15() > 0) {
                 bestPrimal = c;
+                bestPrimalIdx = i;
                 break;
             }
         }
@@ -132,16 +178,12 @@ public class SymbolState {
             // This ensures a perfectly smooth line with zero "cold start" delay.
             strategy.adoptState(bestPrimal);
 
-            // Since ArcVwap doesn't have adoptState, we MUST warm it up from the very
-            // beginning of the history buffer
-            for (int i = 0; i <= historicalCandles.indexOf(bestPrimal); i++) {
-                strategy.warmupArcVwap(historicalCandles.get(i));
-            }
+
 
             logger.info("SymbolState [{} {}]: Primed strategy from DB baseline at {}", symbol, tf,
                     bestPrimal.getTimestamp());
 
-            int startIndex = historicalCandles.indexOf(bestPrimal) + 1;
+            int startIndex = bestPrimalIdx + 1;
             for (int i = startIndex; i < historicalCandles.size(); i++) {
                 Candle c = historicalCandles.get(i);
                 Candle prev = i > 0 ? historicalCandles.get(i - 1) : null;
@@ -194,22 +236,44 @@ public class SymbolState {
                 lastFlipTimes.put(tf, historicalCandles.get(0).getTimestamp());
             }
         }
-        // Hydrate the RAM buffer
+        // Hydrate the RAM buffer (bounded to MAX_HOT_CANDLES to protect JVM heap)
         java.util.List<Candle> buffer = historyBuffers.get(tf);
         if (buffer != null) {
             synchronized (buffer) {
                 buffer.clear();
-                buffer.addAll(historicalCandles);
+                int limit = MAX_HOT_CANDLES.getOrDefault(tf, 2500);
+                int start = Math.max(0, historicalCandles.size() - limit);
+                buffer.addAll(historicalCandles.subList(start, historicalCandles.size()));
             }
         }
+
+
     }
 
     /** Returns true if any state changed (price/indicator updated). */
     private boolean updateTimeframe(String tf, double price, double quantity, java.time.LocalDateTime time) {
-        java.time.LocalDateTime start = getIntervalStartTimeCached(time, tf);
         Candle current = currentCandles.get(tf);
+        // Volume candle branch disabled — see TIMEFRAMES comment above.
+        // boolean isVolumeCandle = tf.endsWith("V");
+        boolean newCandleStarted = false;
+        java.time.LocalDateTime start = time;
 
-        if (current == null || start.isAfter(current.getTimestamp())) {
+        // if (isVolumeCandle) {
+        //     double targetVol = Double.parseDouble(tf.replace("kV", "")) * 1000;
+        //     if (current == null || current.getVolume() >= targetVol) {
+        //         newCandleStarted = true;
+        //         start = time;
+        //     } else {
+        //         start = current.getTimestamp();
+        //     }
+        // } else {
+            start = getIntervalStartTimeCached(time, tf);
+            if (current == null || start.isAfter(current.getTimestamp())) {
+                newCandleStarted = true;
+            }
+        // }
+
+        if (newCandleStarted) {
             // New Candle Started
             if (current != null) {
                 lastStablePrices.put(tf, current.getClose());
@@ -227,12 +291,17 @@ public class SymbolState {
                             buffer.set(buffer.size() - 1, current);
                         }
 
+                        // Batch trim the head with a single System.arraycopy via subList().clear()
+                        // rather than repeated O(N) buffer.remove(0) calls in a loop.
                         int limit = MAX_HOT_CANDLES.getOrDefault(tf, 1000);
-                        if (buffer.size() > limit) {
-                            buffer.subList(0, buffer.size() - limit).clear();
+                        int excess = buffer.size() - limit;
+                        if (excess > 0) {
+                            buffer.subList(0, excess).clear();
                         }
                     }
                 }
+
+
 
                 if (onCandleComplete != null) {
                     onCandleComplete.onComplete(this.symbol, tf, current);
@@ -241,59 +310,20 @@ public class SymbolState {
 
             Candle newCandle = new Candle(price, price, price, price, quantity, start);
 
-            Strategy macroStrategy = strategies.get("15min");
-            int macroBias = tf.equals("15min") ? 999 : ((macroStrategy != null) ? macroStrategy.getBias() : 0);
-            strategies.get(tf).onNewCandle(current, newCandle, macroBias);
-
-            if (current != null) {
-                // Confirmed Trend Flip Detection (only on candle close)
-                boolean shouldNotify = tf.equals("3min") || tf.equals("5min");
-
-                Integer trendAtClose1 = current.getStTrend();
-                Integer lastConfirmed1 = confirmedTrendMap1.get(tf);
-                if (trendAtClose1 != null && lastConfirmed1 != null && !trendAtClose1.equals(lastConfirmed1)) {
-                    lastFlipTimes.put(tf, current.getTimestamp());
-
-                    double atr = current.getAtr() != null ? current.getAtr() : 0;
-                    boolean isVolatile = atr >= indicatorConfig.getAtrThreshold();
-
-                    if (onTrendFlip != null && shouldNotify) {
-                        if (isVolatile) {
-                            onTrendFlip.onFlip(this.symbol, tf, trendAtClose1, false);
-                        } else {
-                            logger.info(
-                                    "SymbolState [{} {}]: Trend flipped but ATR ({}) below threshold ({}). Alert suppressed.",
-                                    symbol, tf, atr, indicatorConfig.getAtrThreshold());
-                        }
-                    }
-                }
-                if (trendAtClose1 != null) {
-                    confirmedTrendMap1.put(tf, trendAtClose1);
-                }
-
-                Integer trendAtClose2 = current.getStTrend2();
-                Integer lastConfirmed2 = confirmedTrendMap2.get(tf);
-                if (trendAtClose2 != null && lastConfirmed2 != null && !trendAtClose2.equals(lastConfirmed2)) {
-                    double atr = current.getAtr() != null ? current.getAtr() : 0;
-                    if (onTrendFlip != null && shouldNotify && atr >= indicatorConfig.getAtrThreshold()) {
-                        onTrendFlip.onFlip(this.symbol, tf, trendAtClose2, true);
-                    }
-                }
-                if (trendAtClose2 != null) {
-                    confirmedTrendMap2.put(tf, trendAtClose2);
-                }
-            }
+            strategies.get(tf).onNewCandle(current, newCandle, 0);
 
             current = newCandle;
             currentCandles.put(tf, current);
         } else {
-            Double stablePrice = lastStablePrices.get(tf);
-            if (stablePrice != null && stablePrice > 0) {
-                double deviation = Math.abs(price - stablePrice) / stablePrice;
-                if (deviation > 0.5) {
-                    logger.error("SymbolState [{} {}]: Ignored outlier tick {} (deviation: {}% from stable {})", symbol,
-                            tf, price, (deviation * 100), stablePrice);
-                    return false;
+            if (!isSensexOption()) {
+                Double stablePrice = lastStablePrices.get(tf);
+                if (stablePrice != null && stablePrice > 0) {
+                    double deviation = Math.abs(price - stablePrice) / stablePrice;
+                    if (deviation > 0.5) {
+                        logger.error("SymbolState [{} {}]: Ignored outlier tick {} (deviation: {}% from stable {})", symbol,
+                                tf, price, (deviation * 100), stablePrice);
+                        return false;
+                    }
                 }
             }
 
@@ -321,7 +351,7 @@ public class SymbolState {
      */
     public Map<String, java.util.List<Candle>> getActiveCandles() {
         Map<String, java.util.List<Candle>> result = new java.util.HashMap<>();
-        for (String tf : timeframes) {
+        for (String tf : TIMEFRAMES) {
             Candle current = currentCandles.get(tf);
             java.util.List<Candle> list = new java.util.ArrayList<>();
             if (current != null) {
@@ -342,8 +372,6 @@ public class SymbolState {
         safePut(values, "ema15_5", strategy.getEma15_5());
         safePut(values, "ema15_15", strategy.getEma15_15());
         safePut(values, "ema15_15_15", strategy.getEma15_15_15());
-        safePut(values, "ema15_15_15_15", strategy.getEma15_15_15_15());
-        safePut(values, "ema15_15_15_15_30", strategy.getEma15_15_15_15_30());
 
         safePut(values, "stMa", current.getStMa());
         safePut(values, "stUp", current.getStUp());
@@ -352,34 +380,27 @@ public class SymbolState {
 
         // SuperTrend 2 (ST100)
         safePut(values, "stMa2", current.getStMa2());
+        safePut(values, "stUp2", current.getStUp2());
         safePut(values, "stDn2", current.getStDn2());
         safePut(values, "stTrend2", current.getStTrend2());
 
         // ATR Volatility
         safePut(values, "atr", current.getAtr());
 
-        // Arc VWAP Supertrend
-        safePut(values, "arcValue", current.getArcValue());
+        // SuperTrend MTF Heikin Ashi
+        safePut(values, "haTrailingSl", current.getHaTrailingSl());
+        safePut(values, "haTrend", current.getHaTrend());
+        safePut(values, "htfTrailingSl", current.getHtfTrailingSl());
+        safePut(values, "htfTrend", current.getHtfTrend());
 
-        // DEBUG AUDIT (Temporary)
-        if (symbol.equals("NIFTY 50") && tf.equals("3min")) {
-            // Basic log to verify the bridge is working
-            if (Math.random() < 0.01) {
-                logger.info("Indicator Link Audit [{} {}]: Arc={} VWAP={}",
-                        symbol, tf, current.getArcValue(), current.getVwapSession());
-            }
-        }
-
-        // Store booleans as 1.0/0.0 so they fit in the Double map
-        Boolean arcTrend = current.getArcTrend();
-        if (arcTrend != null)
-            safePut(values, "arcTrend", arcTrend ? 1.0 : 0.0);
-        Boolean arcFlip = current.getArcFlipConfirmed();
-        if (arcFlip != null)
-            safePut(values, "arcFlipConfirmed", arcFlip ? 1.0 : 0.0);
-        safePut(values, "vwapSession", current.getVwapSession());
-        safePut(values, "vwapWeek", current.getVwapWeek());
-        safePut(values, "vwapMonth", current.getVwapMonth());
+        
+        // Update Matrix API Caches (Zero-allocation path for /matrix endpoint)
+        if (current.getStTrend() != null) stTrendByTfCache.put(tf, current.getStTrend());
+        if (current.getStTrend2() != null) stTrend2ByTfCache.put(tf, current.getStTrend2());
+        
+        Double e15 = strategy.getEma15();
+        Double e15_5 = strategy.getEma15_5();
+        emaBiasByTfCache.put(tf, (e15 != null && e15_5 != null) ? (e15 > e15_5 ? 1 : -1) : 0);
     }
 
     /**
@@ -438,8 +459,6 @@ public class SymbolState {
                 return 3;
             case "5min":
                 return 5;
-            case "15min":
-                return 15;
             default:
                 return 1;
         }
@@ -471,6 +490,18 @@ public class SymbolState {
         return lastFlipTimes;
     }
 
+    public java.util.Map<String, Integer> getStTrendByTfCache() {
+        return stTrendByTfCache;
+    }
+
+    public java.util.Map<String, Integer> getStTrend2ByTfCache() {
+        return stTrend2ByTfCache;
+    }
+
+    public java.util.Map<String, Integer> getEmaBiasByTfCache() {
+        return emaBiasByTfCache;
+    }
+
     /**
      * The heart of "Hot Charts": Returns the full history for a timeframe directly
      * from RAM.
@@ -482,6 +513,18 @@ public class SymbolState {
         synchronized (buffer) {
             return new java.util.ArrayList<>(buffer);
         }
+    }
+
+    public boolean isSensexOption() {
+        if (symbol == null) return false;
+        String s = symbol.trim().toUpperCase();
+        if (s.equals("SENSEX") || s.equals("NIFTY 50") || s.equals("BANKEX")) {
+            return false;
+        }
+        return s.endsWith("CE") || s.endsWith("PE")
+                || s.endsWith("CALL") || s.endsWith("PUT")
+                || s.contains(" CE") || s.contains(" PE")
+                || (s.startsWith("SENSEX") && (s.contains("CE") || s.contains("PE")));
     }
 
 }

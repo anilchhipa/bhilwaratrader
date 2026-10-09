@@ -16,6 +16,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import org.jctools.queues.MpscArrayQueue;
 
 import org.slf4j.Logger;
@@ -38,12 +40,11 @@ public class Engine {
 
     // Leveraging Java 21+ Virtual Threads (Project Loom) for scalability
     private final ExecutorService asyncPool = Executors.newVirtualThreadPerTaskExecutor();
-    private final ConcurrentHashMap<String, Long> lastTickQueueTime = new ConcurrentHashMap<>();
+    // Use long[] (length-1 mutable holder) to avoid autoboxing Long on every tick
+    private final ConcurrentHashMap<String, long[]> lastTickQueueTime = new ConcurrentHashMap<>();
 
     // --- ULTRA-LOW LATENCY INGESTION PIPELINE ---
-    // Object Pool for QueuedTick to eliminate per-tick GC allocations
-    private final QueuedTick[] tickPool = new QueuedTick[262144];
-
+    // Immutable Java 21 Record for thread-safe zero-race ingestion
     private final MpscArrayQueue<QueuedTick> tickQueue = new MpscArrayQueue<>(131072);
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final ExecutorService processorPool = Executors.newSingleThreadExecutor(r -> {
@@ -84,7 +85,10 @@ public class Engine {
                         logger.error("Engine: Critical error in TickProcessor: {}", e.getMessage(), e);
                     }
                 } else {
-                    Thread.onSpinWait();
+                    // 1 µs park: releases the CPU slice instead of burning a full core
+                    // with Thread.onSpinWait(). Latency impact is negligible at SENSEX
+                    // tick rates (~5–50 ticks/sec per symbol).
+                    LockSupport.parkNanos(1_000L);
                 }
             }
             logger.info("Engine: Tick Processor shutdown complete.");
@@ -121,15 +125,7 @@ public class Engine {
     }
 
     private void onTrendFlip(String symbol, String timeframe, int trend, boolean isSecondary) {
-        CompletableFuture.runAsync(() -> {
-            try {
-                if (telegramService != null) {
-                    telegramService.sendTrendFlipAlert(symbol, timeframe, trend, isSecondary);
-                }
-            } catch (Exception e) {
-                logger.error("Error sending Telegram alert: {}", e.getMessage());
-            }
-        }, asyncPool);
+        // Signal generation temporarily disabled pending new calculation model
     }
 
     public void sendStartupMessage() {
@@ -139,23 +135,24 @@ public class Engine {
     }
 
     /**
-     * Producer: Reuses an object from the pool and drops it into the queue.
-     * Zero-allocation in the hot path.
+     * Producer: Thread-safe ingestion using immutable Java 21 record.
      */
+    // Counter for logging dropped ticks (avoids log spam)
+    private final AtomicInteger droppedTickCounter = new AtomicInteger(0);
+
     public void onTick(String token, double price, double quantity) {
         if (!MarketUtils.isMarketOpen()) {
+            // Log every 500th dropped tick so timezone/time issues are visible in logs
+            if (droppedTickCounter.incrementAndGet() % 500 == 0) {
+                logger.warn("Engine: Ticks are being dropped — market reported as closed. " +
+                    "Current IST time check: {}. If this is wrong, verify server timezone. " +
+                    "Total dropped so far: {}", java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata")), droppedTickCounter.get());
+            }
             return;
         }
+        droppedTickCounter.set(0); // reset on valid tick
 
-        // Circular pool to avoid new object creation
-        int idx = (int) (System.nanoTime() % tickPool.length);
-        QueuedTick qTick = tickPool[idx];
-        if (qTick == null) {
-            qTick = new QueuedTick();
-            tickPool[idx] = qTick;
-        }
-
-        qTick.set(token, price, quantity);
+        QueuedTick qTick = new QueuedTick(token, price, quantity, java.time.LocalDateTime.now());
 
         if (!tickQueue.offer(qTick)) {
             logger.warn("Engine: Ingestion Overflow! Queue full, dropping tick for token {}", token);
@@ -172,16 +169,24 @@ public class Engine {
 
         SymbolState state = symbolStates.get(symbol);
         if (state != null) {
-            java.util.Set<String> dirtyIntervals = state.update(qTick.price(), qTick.quantity(), LocalDateTime.now());
-            if (dirtyIntervals.isEmpty())
+            // Use the timestamp captured at enqueue time — no new LocalDateTime allocation here.
+            int dirtyMask = state.update(qTick.price(), qTick.quantity(), qTick.time());
+            if (dirtyMask == 0)
                 return;
 
             long now = System.currentTimeMillis();
-            long lastQueue = lastTickQueueTime.getOrDefault(symbol, 0L);
+            // long[] holder avoids autoboxing a new Long object on every tick
+            long[] holder = lastTickQueueTime.computeIfAbsent(symbol, k -> new long[]{0L});
+            long lastQueue = holder[0];
 
             if (now - lastQueue >= 50) {
-                lastTickQueueTime.put(symbol, now);
-                final java.util.Set<String> toSync = dirtyIntervals;
+                holder[0] = now;
+                final java.util.Set<String> toSync = new java.util.HashSet<>(6);
+                for (int i = 0; i < SymbolState.TIMEFRAMES.length; i++) {
+                    if ((dirtyMask & (1 << i)) != 0) {
+                        toSync.add(SymbolState.TIMEFRAMES[i]);
+                    }
+                }
                 CompletableFuture.runAsync(() -> syncAndBroadcast(state, toSync), asyncPool);
             }
         }
@@ -196,13 +201,7 @@ public class Engine {
         if (intervals == null || intervals.isEmpty())
             return;
 
-        // 1. Pipelined Redis Update (O(1) round-trip for all timeframes)
-        if (redisClient != null) {
-            redisClient.pushStatePipelined(state.getSymbol(), intervals, state.getCurrentCandles(),
-                    state.getIndicatorValues());
-        }
-
-        // 2. Binary Protobuf Broadcast for UI
+        // Binary Protobuf Broadcast for UI (direct low-latency WebSocket push)
         if (broadcaster != null) {
             for (String interval : intervals) {
                 Candle candle = state.getCurrentCandles().get(interval);
@@ -221,10 +220,11 @@ public class Engine {
         logger.info("Engine: Flushing active final candles to TimescaleDB...");
         for (SymbolState state : symbolStates.values()) {
             Map<String, List<Candle>> activeData = state.getActiveCandles();
-            for (String tf : activeData.keySet()) {
-                List<Candle> candles = activeData.get(tf);
+            // entrySet() avoids a second map lookup compared to keySet() + get()
+            for (Map.Entry<String, List<Candle>> entry : activeData.entrySet()) {
+                List<Candle> candles = entry.getValue();
                 if (!candles.isEmpty()) {
-                    timescaleRepository.saveCandles(candles, state.getSymbol(), tf);
+                    timescaleRepository.saveCandles(candles, state.getSymbol(), entry.getKey());
                 }
             }
         }
@@ -256,29 +256,8 @@ public class Engine {
     }
 
     /**
-     * Mutable QueuedTick for object pooling.
+     * Immutable Java 21 Record representing a high-throughput market tick.
+     * Guarantees thread-safe lock-free memory visibility across threads.
      */
-    private static class QueuedTick {
-        private String token;
-        private double price;
-        private double quantity;
-
-        public void set(String token, double price, double quantity) {
-            this.token = token;
-            this.price = price;
-            this.quantity = quantity;
-        }
-
-        public String token() {
-            return token;
-        }
-
-        public double price() {
-            return price;
-        }
-
-        public double quantity() {
-            return quantity;
-        }
-    }
+    public record QueuedTick(String token, double price, double quantity, java.time.LocalDateTime time) {}
 }

@@ -124,6 +124,18 @@ button {
   box-shadow: 0 0 10px rgba(244, 63, 94, 0.3) !important;
 }
 
+.chart-tool-btn.btn-exit {
+  color: #f59e0b !important;
+  border-color: rgba(245, 158, 11, 0.25) !important;
+  background: rgba(245, 158, 11, 0.05) !important;
+}
+
+.chart-tool-btn.btn-exit:hover {
+  background: rgba(245, 158, 11, 0.15) !important;
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3) !important;
+}
+
 .chart-tool-btn.btn-replay {
   color: var(--accent-neon-blue) !important;
   border-color: rgba(0, 242, 255, 0.2) !important;
@@ -133,6 +145,21 @@ button {
   background: rgba(0, 242, 255, 0.1) !important;
   border-color: var(--accent-neon-blue) !important;
   box-shadow: 0 0 10px rgba(0, 242, 255, 0.3) !important;
+}
+
+.chart-tool-btn.btn-renko {
+  color: #00e5ff !important;
+  border-color: rgba(0, 229, 255, 0.25) !important;
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.chart-tool-btn.btn-renko:hover,
+.chart-tool-btn.btn-renko.active {
+  background: rgba(0, 229, 255, 0.2) !important;
+  border-color: #00e5ff !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.4) !important;
 }
 
 .chart-tool-btn.btn-max {
@@ -158,6 +185,21 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 768px) {
+  html, body, * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+
+  ::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent !important;
+  }
 }
 
 /* Tooltip base */

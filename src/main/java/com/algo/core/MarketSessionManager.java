@@ -64,7 +64,7 @@ public class MarketSessionManager {
                 // Also trigger an explicit sync of missing live data just in case
                 // loadInitialData
                 // only grabbed the 500 minimum and missed the last few minutes
-                for (String tf : new String[] { "1min", "3min", "5min", "15min" }) {
+                for (String tf : new String[] { "1min", "3min", "5min" }) {
                     historicalDataService.syncData(symbol, token, tf);
                 }
             }

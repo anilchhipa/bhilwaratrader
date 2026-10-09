@@ -109,8 +109,6 @@ public class TimescaleRepository {
                         "ema15_5 DOUBLE PRECISION, " +
                         "ema15_15 DOUBLE PRECISION, " +
                         "ema15_15_15 DOUBLE PRECISION, " +
-                        "ema15_15_15_15 DOUBLE PRECISION, " +
-                        "ema15_15_15_15_30 DOUBLE PRECISION, " +
                         "st_ma DOUBLE PRECISION, " +
                         "st_up DOUBLE PRECISION, " +
                         "st_dn DOUBLE PRECISION, " +
@@ -127,12 +125,6 @@ public class TimescaleRepository {
                 try {
                     stmt.execute(
                             "ALTER TABLE candles ADD COLUMN IF NOT EXISTS volume DOUBLE PRECISION NOT NULL DEFAULT 0");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_value DOUBLE PRECISION");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_trend BOOLEAN");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS arc_flip_confirmed BOOLEAN");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_session DOUBLE PRECISION");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_week DOUBLE PRECISION");
-                    stmt.execute("ALTER TABLE candles ADD COLUMN IF NOT EXISTS vwap_month DOUBLE PRECISION");
                 } catch (SQLException e) {
                 }
 
@@ -140,6 +132,23 @@ public class TimescaleRepository {
                 try {
                     stmt.execute("SELECT create_hypertable('candles', 'time', if_not_exists => TRUE)");
                 } catch (SQLException e) {
+                }
+
+                // Enable TimescaleDB Chunk Compression (typically achieves 90%+ disk space reduction)
+                try {
+                    stmt.execute("ALTER TABLE candles SET (" +
+                            "timescaledb.compress, " +
+                            "timescaledb.compress_segmentby = 'symbol, interval', " +
+                            "timescaledb.compress_orderby = 'time DESC')");
+                } catch (SQLException e) {
+                    // Ignored if already enabled or plain postgres
+                }
+
+                // Add Automated Compression Policy: Compress hypertable chunks older than 3 days
+                try {
+                    stmt.execute("SELECT add_compression_policy('candles', INTERVAL '3 days', if_not_exists => TRUE)");
+                } catch (SQLException e) {
+                    // Ignored if policy exists
                 }
 
                 // Indexes
@@ -202,19 +211,16 @@ public class TimescaleRepository {
 
     private int executeSaveWithConnection(Connection conn, List<Candle> candles, String symbol, String interval) throws SQLException {
         String sql = "INSERT INTO candles (time, symbol, interval, open, high, low, close, volume, " +
-                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, " +
-                "arc_value, arc_trend, arc_flip_confirmed, vwap_session, vwap_week, vwap_month) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ema15, ema15_5, ema15_15, ema15_15_15, " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (time, symbol, interval) DO UPDATE SET " +
                 "open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, " +
                 "close = EXCLUDED.close, volume = EXCLUDED.volume, " +
                 "ema15 = EXCLUDED.ema15, ema15_5 = EXCLUDED.ema15_5, ema15_15 = EXCLUDED.ema15_15, " +
-                "ema15_15_15 = EXCLUDED.ema15_15_15, ema15_15_15_15 = EXCLUDED.ema15_15_15_15, ema15_15_15_15_30 = EXCLUDED.ema15_15_15_15_30, " +
+                "ema15_15_15 = EXCLUDED.ema15_15_15, " +
                 "st_ma = EXCLUDED.st_ma, st_up = EXCLUDED.st_up, st_dn = EXCLUDED.st_dn, st_trend = EXCLUDED.st_trend, " +
-                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr, " +
-                "arc_value = EXCLUDED.arc_value, arc_trend = EXCLUDED.arc_trend, arc_flip_confirmed = EXCLUDED.arc_flip_confirmed, " +
-                "vwap_session = EXCLUDED.vwap_session, vwap_week = EXCLUDED.vwap_week, vwap_month = EXCLUDED.vwap_month";
+                "st_ma2 = EXCLUDED.st_ma2, st_up2 = EXCLUDED.st_up2, st_dn2 = EXCLUDED.st_dn2, st_trend2 = EXCLUDED.st_trend2, atr = EXCLUDED.atr";
 
         int savedCount = 0;
         boolean originalAutoCommit = conn.getAutoCommit();
@@ -234,24 +240,15 @@ public class TimescaleRepository {
                 setDoubleOrNull(pstmt, 10, candle.getEma15_5());
                 setDoubleOrNull(pstmt, 11, candle.getEma15_15());
                 setDoubleOrNull(pstmt, 12, candle.getEma15_15_15());
-                setDoubleOrNull(pstmt, 13, candle.getEma15_15_15_15());
-                setDoubleOrNull(pstmt, 14, candle.getEma15_15_15_15_30());
-                setDoubleOrNull(pstmt, 15, candle.getStMa());
-                setDoubleOrNull(pstmt, 16, candle.getStUp());
-                setDoubleOrNull(pstmt, 17, candle.getStDn());
-                setIntegerOrNull(pstmt, 18, candle.getStTrend());
-                setDoubleOrNull(pstmt, 19, candle.getStMa2());
-                setDoubleOrNull(pstmt, 20, candle.getStUp2());
-                setDoubleOrNull(pstmt, 21, candle.getStDn2());
-                setIntegerOrNull(pstmt, 22, candle.getStTrend2());
-                setDoubleOrNull(pstmt, 23, candle.getAtr());
-
-                setDoubleOrNull(pstmt, 24, candle.getArcValue());
-                setBooleanOrNull(pstmt, 25, candle.getArcTrend());
-                setBooleanOrNull(pstmt, 26, candle.getArcFlipConfirmed());
-                setDoubleOrNull(pstmt, 27, candle.getVwapSession());
-                setDoubleOrNull(pstmt, 28, candle.getVwapWeek());
-                setDoubleOrNull(pstmt, 29, candle.getVwapMonth());
+                setDoubleOrNull(pstmt, 13, candle.getStMa());
+                setDoubleOrNull(pstmt, 14, candle.getStUp());
+                setDoubleOrNull(pstmt, 15, candle.getStDn());
+                setIntegerOrNull(pstmt, 16, candle.getStTrend());
+                setDoubleOrNull(pstmt, 17, candle.getStMa2());
+                setDoubleOrNull(pstmt, 18, candle.getStUp2());
+                setDoubleOrNull(pstmt, 19, candle.getStDn2());
+                setIntegerOrNull(pstmt, 20, candle.getStTrend2());
+                setDoubleOrNull(pstmt, 21, candle.getAtr());
 
                 pstmt.addBatch();
             }
@@ -270,13 +267,12 @@ public class TimescaleRepository {
     public List<Candle> getLatestCandles(String symbol, String interval, int count) {
         List<Candle> candles = new ArrayList<>();
         String sql = "SELECT time, open, high, low, close, volume, " +
-                "ema15, ema15_5, ema15_15, ema15_15_15, ema15_15_15_15, ema15_15_15_15_30, " +
-                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr, " +
-                "arc_value, arc_trend, arc_flip_confirmed, vwap_session, vwap_week, vwap_month " +
-                "FROM candles " +
-                "WHERE symbol = ? AND interval = ? " +
-                "ORDER BY time DESC " +
-                "LIMIT ?";
+                "ema15, ema15_5, ema15_15, ema15_15_15, " +
+                "st_ma, st_up, st_dn, st_trend, st_ma2, st_up2, st_dn2, st_trend2, atr " +
+                "FROM (" +
+                "  SELECT * FROM candles WHERE symbol = ? AND interval = ? ORDER BY time DESC LIMIT ?" +
+                ") sub " +
+                "ORDER BY time ASC";
 
         Connection conn = null;
         try {
@@ -303,8 +299,6 @@ public class TimescaleRepository {
                     candle.setEma15_5(getDoubleOrNull(rs, "ema15_5"));
                     candle.setEma15_15(getDoubleOrNull(rs, "ema15_15"));
                     candle.setEma15_15_15(getDoubleOrNull(rs, "ema15_15_15"));
-                    candle.setEma15_15_15_15(getDoubleOrNull(rs, "ema15_15_15_15"));
-                    candle.setEma15_15_15_15_30(getDoubleOrNull(rs, "ema15_15_15_15_30"));
                     candle.setStMa(getDoubleOrNull(rs, "st_ma"));
                     candle.setStUp(getDoubleOrNull(rs, "st_up"));
                     candle.setStDn(getDoubleOrNull(rs, "st_dn"));
@@ -314,13 +308,6 @@ public class TimescaleRepository {
                     candle.setStDn2(getDoubleOrNull(rs, "st_dn2"));
                     candle.setStTrend2(getIntegerOrNull(rs, "st_trend2"));
                     candle.setAtr(getDoubleOrNull(rs, "atr"));
-
-                    candle.setArcValue(getDoubleOrNull(rs, "arc_value"));
-                    candle.setArcTrend(getBooleanOrNull(rs, "arc_trend"));
-                    candle.setArcFlipConfirmed(getBooleanOrNull(rs, "arc_flip_confirmed"));
-                    candle.setVwapSession(getDoubleOrNull(rs, "vwap_session"));
-                    candle.setVwapWeek(getDoubleOrNull(rs, "vwap_week"));
-                    candle.setVwapMonth(getDoubleOrNull(rs, "vwap_month"));
 
                     candles.add(candle);
                 }
@@ -335,16 +322,12 @@ public class TimescaleRepository {
                 }
             }
         }
-
-        List<Candle> reversed = new ArrayList<>();
-        for (int i = candles.size() - 1; i >= 0; i--) {
-            reversed.add(candles.get(i));
-        }
-        return reversed;
+        // Results already arrive in ASC order from the subquery — no reversal needed.
+        return candles;
     }
 
     public LocalDateTime getLastCandleTime(String symbol, String interval) {
-        String sql = "SELECT MAX(time) as last_time FROM candles WHERE symbol = ? AND interval = ?";
+        String sql = "SELECT time as last_time FROM candles WHERE symbol = ? AND interval = ? ORDER BY time DESC LIMIT 1";
         Connection conn = null;
         try {
             conn = timescaleClient.getConnection();
@@ -371,8 +354,8 @@ public class TimescaleRepository {
         return null;
     }
 
-    public int getCandleCount(String symbol, String interval) {
-        String sql = "SELECT COUNT(*) as count FROM candles WHERE symbol = ? AND interval = ?";
+    public int getCandleCount(String symbol, String interval, int limit) {
+        String sql = "SELECT COUNT(*) as count FROM (SELECT 1 FROM candles WHERE symbol = ? AND interval = ? LIMIT ?) sub";
         Connection conn = null;
         try {
             conn = timescaleClient.getConnection();
@@ -381,6 +364,7 @@ public class TimescaleRepository {
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, symbol);
                 pstmt.setString(2, interval);
+                pstmt.setInt(3, limit);
                 ResultSet rs = pstmt.executeQuery();
                 if (rs.next())
                     return rs.getInt("count");
@@ -396,6 +380,10 @@ public class TimescaleRepository {
             }
         }
         return 0;
+    }
+
+    public int getCandleCount(String symbol, String interval) {
+        return getCandleCount(symbol, interval, 50000);
     }
 
     private void setDoubleOrNull(PreparedStatement pstmt, int index, Double value) throws SQLException {

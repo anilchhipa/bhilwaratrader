@@ -23,8 +23,14 @@ public class TimescaleClient {
             config.setJdbcUrl(url);
             config.setUsername(user);
             config.setPassword(password);
-            config.setMaximumPoolSize(20);
-            config.setInitializationFailTimeout(0); // Don't crash on start
+            // Pool sizing: 30 connections handles concurrent history requests, the
+            // 2s TimescaleFlusher batch, and async candle saves without exhaustion.
+            config.setMaximumPoolSize(30);
+            config.setMinimumIdle(5);                 // Keep 5 warm connections at all times
+            config.setConnectionTimeout(3_000);       // Fail-fast: 3 s to acquire a connection
+            config.setIdleTimeout(600_000);           // Release idle connections after 10 min
+            config.setKeepaliveTime(300_000);         // Ping idle connections every 5 min
+            config.setInitializationFailTimeout(0);   // Don't crash on startup if DB is down
             ds = new HikariDataSource(config);
         } catch (Exception e) {
             System.err.println("TimescaleDB Connection Failed: " + e.getMessage());

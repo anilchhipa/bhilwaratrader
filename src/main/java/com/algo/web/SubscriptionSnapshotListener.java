@@ -72,12 +72,40 @@ public class SubscriptionSnapshotListener implements ApplicationListener<Session
 
     private void sendSnapshot(String sessionId, String symbol, String interval, String destination) {
         try {
-            List<Candle> history = timescaleRepository.getLatestCandles(symbol, interval, SNAPSHOT_CANDLE_LIMIT);
-            if (history == null || history.isEmpty())
-                return;
+            com.algo.core.SymbolState state = engine.getState(symbol);
+            List<Candle> history = null;
+
+            // Fast path: serve directly from Hot RAM buffer (0ms, 0 DB queries)
+            if (state != null) {
+                List<Candle> ramHistory = state.getHistory(interval);
+                if (ramHistory != null && !ramHistory.isEmpty()) {
+                    int start = Math.max(0, ramHistory.size() - SNAPSHOT_CANDLE_LIMIT);
+                    history = new java.util.ArrayList<>(
+                            ramHistory.subList(start, ramHistory.size()));
+                }
+            }
+
+            // Fallback: fetch from TimescaleDB if RAM buffer is empty
+            if (history == null) {
+                history = timescaleRepository.getLatestCandles(symbol, interval, SNAPSHOT_CANDLE_LIMIT);
+                if (history == null) {
+                    history = new java.util.ArrayList<>();
+                }
+                if (!history.isEmpty() && (history.get(0).getHaTrailingSl() == null || history.get(0).getHaTrailingSl() == 0)) {
+                    List<com.algo.indicators.SupertrendMtfHeikinAshi.SupertrendPoint> haPoints =
+                            com.algo.indicators.SupertrendMtfHeikinAshi.calculate(history, interval);
+                    for (int i = 0; i < history.size() && i < haPoints.size(); i++) {
+                        Candle c = history.get(i);
+                        com.algo.indicators.SupertrendMtfHeikinAshi.SupertrendPoint pt = haPoints.get(i);
+                        c.setHaTrailingSl(pt.trailingSl);
+                        c.setHaTrend(pt.trend);
+                        c.setHtfTrailingSl(pt.htfTrailingSl);
+                        c.setHtfTrend(pt.htfTrend);
+                    }
+                }
+            }
 
             // Append active candle from memory if available
-            com.algo.core.SymbolState state = engine.getState(symbol);
             if (state != null) {
                 Candle active = state.getCurrentCandles().get(interval);
                 if (active != null) {

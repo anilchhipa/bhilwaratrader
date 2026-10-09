@@ -59,13 +59,21 @@ public class SuperTrendedMA {
      */
     public void adoptState(Double ma, Double up, Double dn, Integer trend, double lastPrice, double actualClose,
             Double atr) {
-        this.liveEma = (ma != null) ? ma : 0;
         this.liveUp = (up != null) ? up : 0;
         this.liveDn = (dn != null) ? dn : 0;
         this.liveTrend = (trend != null) ? trend : 1;
         this.liveClose = lastPrice;
         this.trueLiveClose = actualClose;
         this.liveAtr = (atr != null) ? atr : 0;
+
+        if (ma != null && liveAtr > 0) {
+            // Since candle.stMa stores the ratcheted band (liveUp or liveDn),
+            // reverse the Supertrend offset: up = ema - mult*atr, dn = ema + mult*atr
+            double recoveredEma = (liveTrend == 1) ? (liveUp + multiplier * liveAtr) : (liveDn - multiplier * liveAtr);
+            this.liveEma = recoveredEma;
+        } else {
+            this.liveEma = (ma != null) ? ma : (actualClose > 0 ? actualClose : lastPrice);
+        }
 
         this.lastEma = liveEma;
         this.lastUp = liveUp;
@@ -82,7 +90,10 @@ public class SuperTrendedMA {
             upHistory.add(liveUp);
             dnHistory.add(liveDn);
             trendHistory.add(liveTrend);
-            srcHistory.add(lastPrice);
+            srcHistory.add(actualClose > 0 ? actualClose : lastPrice);
+            if (liveAtr > 0) {
+                trHistory.add(liveAtr);
+            }
         }
         publishSnapshots();
     }
@@ -118,7 +129,7 @@ public class SuperTrendedMA {
     }
 
     private void calculateInternal(Candle candle, boolean isNewCandle) {
-        double price = candle.getLow(); // Using LOW instead of CLOSE as per user request
+        double price = candle.getClose(); // Standard Pine Script behavior (src = close)
         double high = candle.getHigh();
         double low = candle.getLow();
         double actualClose = candle.getClose(); // The actual intra-bar close

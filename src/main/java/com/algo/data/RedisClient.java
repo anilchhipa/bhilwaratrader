@@ -24,6 +24,8 @@ public class RedisClient {
         this.jedisPool = pool;
     }
 
+    private static final long DEFAULT_KEY_TTL_SECONDS = 259200L; // 3 days auto-eviction for options/intraday contracts
+
     /**
      * Pushes multiple timeframe updates to Redis in a single network pipeline.
      * Dramatically reduces round-trip latency.
@@ -54,7 +56,8 @@ public class RedisClient {
                 ohlcMap.put("v", String.valueOf(candle.getVolume()));
                 ohlcMap.put("t", String.valueOf(
                         candle.getTimestamp().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()));
-                p.hmset(ohlcKey, ohlcMap);
+                p.hset(ohlcKey, ohlcMap);
+                p.expire(ohlcKey, DEFAULT_KEY_TTL_SECONDS);
 
                 // Indicators Update
                 java.util.Map<String, Double> indicators = indicatorValues.get(interval);
@@ -63,8 +66,10 @@ public class RedisClient {
                     for (java.util.Map.Entry<String, Double> entry : indicators.entrySet()) {
                         indMap.put(entry.getKey(), String.valueOf(entry.getValue()));
                     }
-                    if (!indMap.isEmpty())
-                        p.hmset(indKey, indMap);
+                    if (!indMap.isEmpty()) {
+                        p.hset(indKey, indMap);
+                        p.expire(indKey, DEFAULT_KEY_TTL_SECONDS);
+                    }
                 }
             }
             p.sync();
@@ -83,20 +88,24 @@ public class RedisClient {
             String ohlcKey = symbol + ":" + interval + ":OHLC";
             String indKey = symbol + ":" + interval + ":INDICATORS";
 
-            // Use HMSET for efficient batched O(1) storage
+            // Use HSET for efficient batched O(1) storage
             java.util.Map<String, String> ohlcMap = new java.util.HashMap<>();
             for (String key : ohlc.keySet()) {
                 ohlcMap.put(key, String.valueOf(ohlc.get(key)));
             }
-            if (!ohlcMap.isEmpty())
-                jedis.hmset(ohlcKey, ohlcMap);
+            if (!ohlcMap.isEmpty()) {
+                jedis.hset(ohlcKey, ohlcMap);
+                jedis.expire(ohlcKey, DEFAULT_KEY_TTL_SECONDS);
+            }
 
             java.util.Map<String, String> indMap = new java.util.HashMap<>();
             for (String key : indicators.keySet()) {
                 indMap.put(key, String.valueOf(indicators.get(key)));
             }
-            if (!indMap.isEmpty())
-                jedis.hmset(indKey, indMap);
+            if (!indMap.isEmpty()) {
+                jedis.hset(indKey, indMap);
+                jedis.expire(indKey, DEFAULT_KEY_TTL_SECONDS);
+            }
         } catch (Exception e) {
             System.err.println("Redis Error: " + e.getMessage());
         }
@@ -112,6 +121,7 @@ public class RedisClient {
             String key = symbol + ":" + interval + ":HISTORY";
             jedis.lpush(key, candle.toString());
             jedis.ltrim(key, 0, 99); // Keep only last 100
+            jedis.expire(key, DEFAULT_KEY_TTL_SECONDS);
         } catch (Exception e) {
             System.err.println("Redis Cache Error: " + e.getMessage());
         }

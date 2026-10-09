@@ -22,7 +22,9 @@ fi
 
 echo ">>> Starting Algo Trading Backend with Oracle GraalVM JIT + ZGC..."
 # UseZGC: Zero-latency GC pauses (<1ms)
+# -Xmx2g: Heap headroom for ZGC concurrent collection across tracked symbols
 # -Dspring.native.enabled=false as a fallback
 java -XX:+UseZGC -XX:+UnlockExperimentalVMOptions \
      -XX:+EnableJVMCI -XX:+UseJVMCICompiler \
+     -Xmx2g \
      -jar "$JAR"

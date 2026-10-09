@@ -10,16 +10,12 @@ public class Strategy {
     private double ema15_5 = 0;
     private double ema15_15 = 0;
     private double ema15_15_15 = 0;
-    private double ema15_15_15_15 = 0;
-    private double ema15_15_15_15_30 = 0;
 
     // Use ArrayDeque for O(1) head removal (vs O(N) ArrayList.remove(0))
     private final java.util.ArrayDeque<Double> ema15History = new java.util.ArrayDeque<>(1001);
     private final java.util.ArrayDeque<Double> ema15_5History = new java.util.ArrayDeque<>(1001);
     private final java.util.ArrayDeque<Double> ema15_15History = new java.util.ArrayDeque<>(1001);
     private final java.util.ArrayDeque<Double> ema15_15_15History = new java.util.ArrayDeque<>(1001);
-    private final java.util.ArrayDeque<Double> ema15_15_15_15History = new java.util.ArrayDeque<>(1001);
-    private final java.util.ArrayDeque<Double> ema15_15_15_15_30History = new java.util.ArrayDeque<>(1001);
 
     // Volatile snapshots — updated on candle close, read lock-free by WebSocket
     // threads
@@ -27,36 +23,37 @@ public class Strategy {
     private volatile List<Double> ema15_5HistorySnapshot = java.util.Collections.emptyList();
     private volatile List<Double> ema15_15HistorySnapshot = java.util.Collections.emptyList();
     private volatile List<Double> ema15_15_15HistorySnapshot = java.util.Collections.emptyList();
-    private volatile List<Double> ema15_15_15_15HistorySnapshot = java.util.Collections.emptyList();
-    private volatile List<Double> ema15_15_15_15_30HistorySnapshot = java.util.Collections.emptyList();
+
+    // Dirty flag: set on candle close, cleared after snapshot rebuild.
+    // Avoids creating 4×1000-element ArrayList copies every minute per symbol
+    // when no external reader has requested the history since the last close.
+    private volatile boolean historySnapshotDirty = false;
 
     // Snapshot variables for stable baselines (state after the last closed candle)
     private double ema15_stable = 0;
     private double ema15_5_stable = 0;
     private double ema15_15_stable = 0;
     private double ema15_15_15_stable = 0;
-    private double ema15_15_15_15_stable = 0;
-    private double ema15_15_15_15_30_stable = 0;
 
     private com.algo.indicators.SuperTrendedMA stma;
     private com.algo.indicators.SuperTrendedMA stma2;
-    private com.algo.indicators.ArcVwapSuperTrend arcVwap;
+    private com.algo.indicators.SupertrendMtfHeikinAshi stHa;
 
     // --- Config-driven periods ---
     private final int p1; // EMA base period
     private final int c1; // EMA cascade 1
     private final int c2; // EMA cascade 2
     private final int c3; // EMA cascade 3
-    private final int c4; // EMA cascade 4
-    private final int c5; // EMA cascade 5
 
     public Strategy(IndicatorConfig config) {
+        this(config, "1min");
+    }
+
+    public Strategy(IndicatorConfig config, String timeframe) {
         this.p1 = config.getEmaPeriod1();
         this.c1 = config.getEmaCascade1();
         this.c2 = config.getEmaCascade2();
         this.c3 = config.getEmaCascade3();
-        this.c4 = config.getEmaCascade4();
-        this.c5 = config.getEmaCascade5();
 
         this.stma = new com.algo.indicators.SuperTrendedMA(
                 config.getStMaLength(),
@@ -68,11 +65,7 @@ public class Strategy {
                 config.getStAtrPeriod2(),
                 config.getStMultiplier2(),
                 true);
-        this.arcVwap = new com.algo.indicators.ArcVwapSuperTrend(
-                config.getArcAccelRate(),
-                config.getArcStartMult(),
-                config.getArcSmooth(),
-                config.getArcVwapBoost());
+        this.stHa = new com.algo.indicators.SupertrendMtfHeikinAshi(timeframe);
     }
 
     /**
@@ -85,26 +78,22 @@ public class Strategy {
         this.ema15_5 = candle.getEma15_5() != null ? candle.getEma15_5() : 0;
         this.ema15_15 = candle.getEma15_15() != null ? candle.getEma15_15() : 0;
         this.ema15_15_15 = candle.getEma15_15_15() != null ? candle.getEma15_15_15() : 0;
-        this.ema15_15_15_15 = candle.getEma15_15_15_15() != null ? candle.getEma15_15_15_15() : 0;
-        this.ema15_15_15_15_30 = candle.getEma15_15_15_15_30() != null ? candle.getEma15_15_15_15_30() : 0;
 
         // Set stable snapshots immediately
         this.ema15_stable = ema15;
         this.ema15_5_stable = ema15_5;
         this.ema15_15_stable = ema15_15;
         this.ema15_15_15_stable = ema15_15_15;
-        this.ema15_15_15_15_stable = ema15_15_15_15;
-        this.ema15_15_15_15_30_stable = ema15_15_15_15_30;
 
         if (stma != null) {
             stma.adoptState(candle.getStMa(), candle.getStUp(), candle.getStDn(), candle.getStTrend(),
                     candle.getLow(), candle.getClose(), candle.getAtr());
         }
         if (stma2 != null) {
-            stma2.adoptState(candle.getStMa2(), candle.getStDn2(), candle.getStDn2(), candle.getStTrend2(),
+            // BUG FIX: was incorrectly passing getStDn2() for both up and down bands.
+            stma2.adoptState(candle.getStMa2(), candle.getStUp2(), candle.getStDn2(), candle.getStTrend2(),
                     candle.getLow(), candle.getClose(), candle.getAtr());
         }
-        // arcVwap has no adoptState — it cold-starts cleanly from history seed
     }
 
     public synchronized void onNewCandle(Candle finishedCandle, Candle newCandle, int macroBias) {
@@ -123,9 +112,9 @@ public class Strategy {
             stma2.commit();
             stma2.update(newCandle);
         }
-        if (arcVwap != null) {
-            arcVwap.commit();
-            arcVwap.update(newCandle);
+        if (stHa != null) {
+            stHa.commit();
+            stHa.update(newCandle);
         }
 
         if (finishedCandle != null) {
@@ -134,20 +123,13 @@ public class Strategy {
 
         populateCandleIndicators(newCandle);
 
-        // Publish lock-free snapshots for WebSocket readers (captured once per candle
-        // close)
-        publishHistorySnapshots();
+        // Mark snapshots dirty so that the next getEma*History() call rebuilds them.
+        // We intentionally do NOT build the 6 ArrayLists here — they are only needed
+        // if a WebSocket reader actually requests the history this candle interval.
+        historySnapshotDirty = true;
     }
 
-    /**
-     * Warms up Arc VWAP Supertrend natively by feeding historical candles to it.
-     */
-    public synchronized void warmupArcVwap(Candle candle) {
-        if (arcVwap != null) {
-            arcVwap.commit();
-            arcVwap.update(candle);
-        }
-    }
+
 
     public synchronized void updateLastCandle(Candle candle) {
         // Always calculate live updates from the STABLE baseline (updateLast = true)
@@ -157,8 +139,8 @@ public class Strategy {
             stma.updateLive(candle);
         if (stma2 != null)
             stma2.updateLive(candle);
-        if (arcVwap != null)
-            arcVwap.updateLive(candle);
+        if (stHa != null)
+            stHa.updateLive(candle);
 
         populateCandleIndicators(candle);
     }
@@ -168,8 +150,6 @@ public class Strategy {
         candle.setEma15_5(ema15_5);
         candle.setEma15_15(ema15_15);
         candle.setEma15_15_15(ema15_15_15);
-        candle.setEma15_15_15_15(ema15_15_15_15);
-        candle.setEma15_15_15_15_30(ema15_15_15_15_30);
 
         if (stma != null) {
             if (stma.getLiveMa() != 0)
@@ -190,25 +170,13 @@ public class Strategy {
                 candle.setStDn2(stma2.getLiveDn());
             candle.setStTrend2(stma2.getLiveTrend());
         }
-        if (arcVwap != null) {
-            // Always write VWAP values — they are valid from bar 1
-            double vs = arcVwap.getVwapSession();
-            if (!Double.isNaN(vs) && vs > 0)
-                candle.setVwapSession(vs);
-            double vw = arcVwap.getVwapWeek();
-            if (!Double.isNaN(vw) && vw > 0)
-                candle.setVwapWeek(vw);
-            double vm = arcVwap.getVwapMonth();
-            if (!Double.isNaN(vm) && vm > 0)
-                candle.setVwapMonth(vm);
-
-            // Arc line — only write when the warm-up is complete (not NaN)
-            double arcVal = arcVwap.getLiveArc();
-            if (!Double.isNaN(arcVal) && arcVal > 0) {
-                candle.setArcValue(arcVal);
-                candle.setArcTrend(arcVwap.getLiveTrend());
-                candle.setArcFlipConfirmed(arcVwap.isFlipConfirmed());
-            }
+        if (stHa != null) {
+            if (stHa.getLiveTrailingSl() != 0)
+                candle.setHaTrailingSl(stHa.getLiveTrailingSl());
+            candle.setHaTrend(stHa.getLiveTrend());
+            if (stHa.getLiveHtfTrailingSl() != 0)
+                candle.setHtfTrailingSl(stHa.getLiveHtfTrailingSl());
+            candle.setHtfTrend(stHa.getLiveHtfTrend());
         }
 
     }
@@ -243,16 +211,11 @@ public class Strategy {
             ema15_5 = calculateEMA(ema15, ema15_5_stable, c1);
             ema15_15 = calculateEMA(ema15, ema15_15_stable, c2);
             ema15_15_15 = calculateEMA(ema15_15, ema15_15_15_stable, c3);
-            ema15_15_15_15 = calculateEMA(ema15_15_15, ema15_15_15_15_stable, c4);
-
-            ema15_15_15_15_30 = calculateEMA(ema15_15_15_15, ema15_15_15_15_30_stable, c5);
 
             updateLastInHistory(ema15History, ema15);
             updateLastInHistory(ema15_5History, ema15_5);
             updateLastInHistory(ema15_15History, ema15_15);
             updateLastInHistory(ema15_15_15History, ema15_15_15);
-            updateLastInHistory(ema15_15_15_15History, ema15_15_15_15);
-            updateLastInHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
 
             // OPTIMIZATION: Do NOT publish history snapshots on every live tick.
             // History snapshots (full array copies) are only needed when a candle closes.
@@ -262,16 +225,11 @@ public class Strategy {
             ema15_5 = calculateEMA(ema15, ema15_5, c1);
             ema15_15 = calculateEMA(ema15, ema15_15, c2);
             ema15_15_15 = calculateEMA(ema15_15, ema15_15_15, c3);
-            ema15_15_15_15 = calculateEMA(ema15_15_15, ema15_15_15_15, c4);
-
-            ema15_15_15_15_30 = calculateEMA(ema15_15_15_15, ema15_15_15_15_30, c5);
 
             addToHistory(ema15History, ema15);
             addToHistory(ema15_5History, ema15_5);
             addToHistory(ema15_15History, ema15_15);
             addToHistory(ema15_15_15History, ema15_15_15);
-            addToHistory(ema15_15_15_15History, ema15_15_15_15);
-            addToHistory(ema15_15_15_15_30History, ema15_15_15_15_30);
         }
     }
 
@@ -280,9 +238,6 @@ public class Strategy {
         ema15_5_stable = ema15_5;
         ema15_15_stable = ema15_15;
         ema15_15_15_stable = ema15_15_15;
-        ema15_15_15_15_stable = ema15_15_15_15;
-        ema15_15_15_15_30_stable = ema15_15_15_15_30;
-
     }
 
     private void updateLastInHistory(java.util.ArrayDeque<Double> history, double value) {
@@ -293,17 +248,17 @@ public class Strategy {
     }
 
     /**
-     * Publishes cheap lock-free snapshots of history for WebSocket/external reads.
-     * Called under the existing synchronized lock so the copy is consistent,
-     * but readers never need to hold any lock to safely iterate the result.
+     * Rebuilds all six history snapshots under the existing synchronized lock.
+     * Only called lazily when a reader requests history AND the data is dirty.
+     * This avoids 6×1000-element ArrayList allocations every candle close when
+     * no reader has consumed the history since the previous close.
      */
     private void publishHistorySnapshots() {
-        ema15HistorySnapshot = new ArrayList<>(ema15History);
-        ema15_5HistorySnapshot = new ArrayList<>(ema15_5History);
-        ema15_15HistorySnapshot = new ArrayList<>(ema15_15History);
-        ema15_15_15HistorySnapshot = new ArrayList<>(ema15_15_15History);
-        ema15_15_15_15HistorySnapshot = new ArrayList<>(ema15_15_15_15History);
-        ema15_15_15_15_30HistorySnapshot = new ArrayList<>(ema15_15_15_15_30History);
+        ema15HistorySnapshot                 = new ArrayList<>(ema15History);
+        ema15_5HistorySnapshot               = new ArrayList<>(ema15_5History);
+        ema15_15HistorySnapshot              = new ArrayList<>(ema15_15History);
+        ema15_15_15HistorySnapshot           = new ArrayList<>(ema15_15_15History);
+        historySnapshotDirty = false;
     }
 
     // Getters for Indicators and History
@@ -323,48 +278,36 @@ public class Strategy {
         return ema15_15_15;
     }
 
-    public double getEma15_15_15_15() {
-        return ema15_15_15_15;
-    }
-
-    public double getEma15_15_15_15_30() {
-        return ema15_15_15_15_30;
-    }
-
     // --- Lock-free history getters ---
-    // Reads from volatile snapshot fields that are updated once per candle close.
-    // No synchronization needed — callers (WebSocket broadcaster, etc.) can safely
-    // iterate without ever contending with the live-tick processing lock.
+    // Reads from volatile snapshot fields. Snapshots are rebuilt lazily:
+    // only when dirty (a candle has closed since the last read) and a reader
+    // actually requests the data. No synchronization needed for the read itself.
 
     public List<Double> getEma15History() {
+        if (historySnapshotDirty) { synchronized (this) { if (historySnapshotDirty) publishHistorySnapshots(); } }
         return ema15HistorySnapshot;
     }
 
     public List<Double> getEma15_5History() {
+        if (historySnapshotDirty) { synchronized (this) { if (historySnapshotDirty) publishHistorySnapshots(); } }
         return ema15_5HistorySnapshot;
     }
 
     public List<Double> getEma15_15History() {
+        if (historySnapshotDirty) { synchronized (this) { if (historySnapshotDirty) publishHistorySnapshots(); } }
         return ema15_15HistorySnapshot;
     }
 
     public List<Double> getEma15_15_15History() {
+        if (historySnapshotDirty) { synchronized (this) { if (historySnapshotDirty) publishHistorySnapshots(); } }
         return ema15_15_15HistorySnapshot;
-    }
-
-    public List<Double> getEma15_15_15_15History() {
-        return ema15_15_15_15HistorySnapshot;
-    }
-
-    public List<Double> getEma15_15_15_15_30History() {
-        return ema15_15_15_15_30HistorySnapshot;
     }
 
     public synchronized com.algo.indicators.SuperTrendedMA getStma() {
         return stma;
     }
 
-    public com.algo.indicators.ArcVwapSuperTrend getArcVwap() {
-        return arcVwap;
+    public synchronized com.algo.indicators.SupertrendMtfHeikinAshi getStHa() {
+        return stHa;
     }
 }

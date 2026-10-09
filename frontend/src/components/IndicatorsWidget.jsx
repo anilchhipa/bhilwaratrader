@@ -18,7 +18,6 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
             items: [
                 { key: 'CLOUD', label: 'Cloud 1' },
                 { key: 'CLOUD2', label: 'Cloud 2' },
-                { key: 'ARC_VWAP', label: 'Third Eye' },
             ]
         },
         {
@@ -28,8 +27,22 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
                 { key: 'EMA15_5', label: 'Ind 2' },
                 { key: 'EMA15_15', label: 'Ind 3' },
                 { key: 'EMA15_15_15', label: 'Ind 4' },
-                { key: 'EMA15_15_15_15', label: 'Ind 5' },
-                { key: 'EMA15_15_15_15_30', label: 'Ind 6' },
+            ]
+        },
+        {
+            title: "Renko Panel",
+            items: [
+                { key: 'RENKO2', label: 'Renko 2 (White)' },
+                { key: 'RENKO3', label: 'Renko 3 (Blue)' },
+                { key: 'RENKO_CLOSE', label: 'Close MA (Red)' },
+            ]
+        },
+        {
+            title: "Supertrend MTF Heikin Ashi",
+            items: [
+                { key: 'ST_HA_CURRENT', label: 'Supertrend HA (Current TF)' },
+                { key: 'ST_HA_HTF', label: 'Supertrend HTF (MTF Line)' },
+                { key: 'ST_HA_FLIPS', label: 'HTF Trend Flip Dots' },
             ]
         },
     ];
@@ -81,11 +94,12 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
         <div
             className="premium-widget-panel"
             style={window.innerWidth > 768 ? {
-                left: `${Math.min(window.innerWidth - 340, Math.max(20, position.x))}px`,
-                top: `${Math.min(window.innerHeight - 340, Math.max(20, position.y))}px`,
-                width: '340px',
+                left: `${Math.min(window.innerWidth - 680, Math.max(20, position.x))}px`,
+                top: `${Math.min(window.innerHeight - 100, Math.max(20, position.y))}px`,
+                width: '680px',
+                maxHeight: 'calc(100vh - 40px)',
                 zIndex: 1100
-            } : { zIndex: 1100 }}
+            } : { zIndex: 1100, maxHeight: '85vh' }}
         >
             <div className="premium-widget-header" onMouseDown={startDrag} style={{ cursor: 'move' }}>
                 <div className="premium-widget-title">
@@ -96,7 +110,7 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
             </div>
 
             <div className="premium-widget-body">
-                <div className="categories-container" style={{ gap: '16px' }}>
+                <div className="categories-container" style={{ display: 'grid', gridTemplateColumns: window.innerWidth > 768 ? '1fr 1fr' : '1fr', gap: '16px' }}>
                     {/* Global Viewport Controls */}
                     <div className="category-group" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
                         <label className="group-label">Global Viewport Controls</label>
@@ -110,7 +124,7 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
                                         const count = parseInt(e.target.value);
                                         setZoomVal(count);
                                         localStorage.setItem('chart_zoom_global', count);
-                                        ['1min', '3min', '5min', '15min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, count));
+                                        ['1min', '3min', '5min'].forEach(tf => localStorage.setItem(`chart_zoom_${tf}`, count));
                                         const bc = new BroadcastChannel('grid_chart_sync');
                                         bc.postMessage({ type: 'SYNC_ZOOM', count });
                                         bc.close();
@@ -167,7 +181,7 @@ const IndicatorsWidget = ({ isOpen, onClose, visibility, setVisibility, themeCol
                     {sections.map(section => (
                         <div key={section.title} className="category-group">
                             <label className="group-label">{section.title}</label>
-                            <div className="checkbox-list" style={{ gridTemplateColumns: '1fr', marginTop: '10px' }}>
+                            <div className="checkbox-list" style={{ gridTemplateColumns: section.items.length > 3 ? '1fr 1fr' : '1fr', marginTop: '10px', gap: '8px' }}>
                                 {section.items.map(item => (
                                     <div key={item.key} className="checkbox-item premium-checkbox" style={{ height: '36px' }}>
                                         <label>

@@ -3,21 +3,25 @@ package com.algo.core;
 import java.time.DayOfWeek;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 
 /**
- * Utility for NSE market hours and timing logic
+ * Utility for NSE market hours and timing logic.
+ * All time checks use IST (Asia/Kolkata) explicitly to be server-timezone agnostic.
  */
 public class MarketUtils {
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     public static final LocalTime MARKET_OPEN = LocalTime.of(9, 15);
-    public static final LocalTime MARKET_CLOSE = LocalTime.of(15, 30);
+    public static final LocalTime MARKET_CLOSE = LocalTime.of(15, 40);
 
     /**
      * Returns the last expected candle time based on current time.
      * If market is open, returns current time.
-     * If market is closed, returns the last 15:30.
+     * If market is closed, returns the last 15:40.
      */
     public static LocalDateTime getTargetSyncTime() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(IST);
 
         // Handle Weekends
         if (now.getDayOfWeek() == DayOfWeek.SATURDAY) {
@@ -47,10 +51,10 @@ public class MarketUtils {
     }
 
     /**
-     * Checks if current time is within NSE market hours (Mon-Fri, 9:15-15:30)
+     * Checks if current time is within NSE market hours (Mon-Fri, 9:15-15:40)
      */
     public static boolean isMarketOpen() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(IST);
         if (now.getDayOfWeek() == DayOfWeek.SATURDAY || now.getDayOfWeek() == DayOfWeek.SUNDAY) {
             return false;
         }
@@ -62,7 +66,7 @@ public class MarketUtils {
      * Checks if it's currently pre-market (before 9:15 AM on a weekday)
      */
     public static boolean isPreMarket() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(IST);
         if (now.getDayOfWeek() == DayOfWeek.SATURDAY || now.getDayOfWeek() == DayOfWeek.SUNDAY) {
             return false;
         }
@@ -70,15 +74,15 @@ public class MarketUtils {
     }
 
     /**
-     * Checks if the market session is over (after 3:30 PM)
+     * Checks if the market session is over (after 3:40 PM)
      */
     public static boolean isPostMarket() {
-        return LocalTime.now().isAfter(MARKET_CLOSE);
+        return LocalTime.now(IST).isAfter(MARKET_CLOSE);
     }
 
     /**
      * Checks if a candle timestamp falls within valid standard market hours (09:15
-     * to 15:30)
+     * to 15:40)
      */
     public static boolean isValidCandleTime(LocalDateTime time) {
         LocalTime lt = time.toLocalTime();

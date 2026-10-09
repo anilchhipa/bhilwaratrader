@@ -51,8 +51,15 @@ public class LiveFeed {
                     }
                 }
                 tickers[i] = new KiteTicker(accessToken, apiKey);
+                tickers[i].setTryReconnection(true);
+                try {
+                    tickers[i].setMaximumRetries(100);
+                    tickers[i].setMaximumRetryInterval(10);
+                } catch (Exception | KiteException ignored) {
+                }
                 setupTickerListeners(tickers[i], i);
             }
+            startWatchdog();
         }
     }
 
@@ -71,7 +78,7 @@ public class LiveFeed {
         ticker.setOnDisconnectedListener(new OnDisconnect() {
             @Override
             public void onDisconnected() {
-                logger.info("LiveFeed: KiteTicker {} Disconnected.", tickerIndex);
+                logger.warn("LiveFeed: KiteTicker {} Disconnected. Auto-reconnection active.", tickerIndex);
             }
         });
 
@@ -207,7 +214,40 @@ public class LiveFeed {
         }
     }
 
+    private final java.util.concurrent.ScheduledExecutorService watchdog =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "LiveFeed-Watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+    private final java.util.concurrent.atomic.AtomicBoolean watchdogStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    private void startWatchdog() {
+        if (watchdogStarted.compareAndSet(false, true)) {
+            watchdog.scheduleWithFixedDelay(() -> {
+                try {
+                    if (!com.algo.core.MarketUtils.isMarketOpen() || accessToken == null || accessToken.isBlank()) {
+                        return;
+                    }
+                    for (int i = 0; i < 3; i++) {
+                        if (tickers[i] != null && !tickers[i].isConnectionOpen()) {
+                            logger.warn("LiveFeed Watchdog: KiteTicker {} not open during market hours. Triggering reconnect...", i);
+                            try {
+                                tickers[i].connect();
+                            } catch (Exception ex) {
+                                logger.error("LiveFeed Watchdog: Reconnect error on ticker {}: {}", i, ex.getMessage());
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    logger.error("LiveFeed Watchdog error: {}", t.getMessage());
+                }
+            }, 10, 10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
     public void stop() {
+        watchdog.shutdown();
         for (int i = 0; i < 3; i++) {
             if (tickers[i] != null) {
                 try {

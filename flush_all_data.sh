@@ -1,5 +1,11 @@
 #!/bin/bash
 
+echo "Stopping any running backend server..."
+pkill -f "trading-algo-1.0-SNAPSHOT.jar" || true
+pkill -f "com.algo.TradingApplication" || true
+pkill -f "spring-boot:run" || true
+fuser -k 8080/tcp 2>/dev/null || echo "No backend server was running on port 8080."
+
 echo "Flushing data from PostgreSQL..."
 export PGPASSWORD="password"
 

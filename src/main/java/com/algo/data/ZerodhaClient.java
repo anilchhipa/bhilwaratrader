@@ -827,6 +827,88 @@ public class ZerodhaClient {
     }
 
     /**
+     * Retrieves current open and closed positions from Zerodha.
+     * Key "net": overall net positions; Key "day": intraday positions.
+     */
+    public java.util.Map<String, java.util.List<Position>> getPositions() {
+        if (kiteConnect == null || !isLoggedIn()) {
+            return java.util.Collections.emptyMap();
+        }
+        try {
+            checkRateLimit();
+            return kiteConnect.getPositions();
+        } catch (Exception | KiteException e) {
+            String msg = e instanceof KiteException ? ((KiteException) e).message : e.getMessage();
+            logger.error("ZerodhaClient: Failed to fetch positions: {}", msg);
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Retrieves all orders placed for the day from Zerodha.
+     */
+    public java.util.List<Order> getOrders() {
+        if (kiteConnect == null || !isLoggedIn()) {
+            return java.util.Collections.emptyList();
+        }
+        try {
+            checkRateLimit();
+            return kiteConnect.getOrders();
+        } catch (Exception | KiteException e) {
+            String msg = e instanceof KiteException ? ((KiteException) e).message : e.getMessage();
+            logger.error("ZerodhaClient: Failed to fetch orders: {}", msg);
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /**
+     * Returns the current status string of a single order (e.g. "OPEN", "COMPLETE",
+     * "CANCELLED", "REJECTED"). Returns null if the order is not found in today's order list.
+     * Used by the fail-fast watcher in RiskManagerService.
+     */
+    public String getOrderStatus(String orderId) {
+        if (orderId == null || orderId.startsWith("PAPER-")) {
+            // Paper/mock orders are never truly OPEN on Zerodha — treat as COMPLETE
+            return "COMPLETE";
+        }
+        java.util.List<Order> orders = getOrders();
+        for (Order o : orders) {
+            if (orderId.equals(o.orderId)) {
+                return o.status; // e.g. "OPEN", "COMPLETE", "CANCELLED", "REJECTED"
+            }
+        }
+        // Order not found in today's list — assume it reached a terminal state
+        return null;
+    }
+
+
+    /**
+     * Emergency Kill-Switch action: Cancels all open and trigger-pending orders.
+     * @return count of successfully cancelled orders
+     */
+    public int cancelAllOpenOrders() {
+        if (kiteConnect == null || !isLoggedIn()) {
+            return 0;
+        }
+        try {
+            java.util.List<Order> orders = getOrders();
+            int count = 0;
+            for (Order o : orders) {
+                if (o.status != null && (o.status.equalsIgnoreCase("OPEN") || o.status.equalsIgnoreCase("TRIGGER PENDING"))) {
+                    if (cancelOrder(o.orderId)) {
+                        count++;
+                    }
+                }
+            }
+            logger.warn("ZerodhaClient: Emergency Cancel-All executed. Cancelled {} open orders.", count);
+            return count;
+        } catch (Exception e) {
+            logger.error("ZerodhaClient: Error cancelling all open orders: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
      * Resolves instrument tokens for all symbols registered in the given
      * TokenManager.
      * Uses the Kite Connect getInstruments(exchange) API to look up the numeric
@@ -948,8 +1030,6 @@ public class ZerodhaClient {
                       // 3min
         if (interval.equals("5minute"))
             days = 8;
-        else if (interval.equals("15minute"))
-            days = 20;
         return fetchHistory(instrumentToken, interval, exchange, days);
     }
 

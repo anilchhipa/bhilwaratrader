@@ -40,14 +40,11 @@ message CandleData {
     double stDn2 = 20;
     int32 stTrend2 = 21;
 
-    // Arc VWAP Supertrend
-    double arcValue        = 22;  // smoothed arc line
-    bool   arcTrend        = 23;  // true = bullish
-    bool   arcFlipConfirmed = 24; // flip confirmed by VWAP
-    double vwapSession     = 25;  // daily VWAP
-    double vwapWeek        = 26;  // weekly VWAP
-    double vwapMonth       = 27;  // monthly VWAP
-
+    // SuperTrend MTF Heikin Ashi
+    double haTrailingSl = 22;
+    int32 haTrend = 23;
+    double htfTrailingSl = 24;
+    int32 htfTrend = 25;
 }
 
 message BatchCandleUpdate {

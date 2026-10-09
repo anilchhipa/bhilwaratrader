@@ -24,15 +24,34 @@ public class TradingApplication {
 
     @Bean
     public ZerodhaClient zerodhaClient(IndicatorConfig indicatorConfig) {
-        String userId = System.getenv("KITE_USER_ID") != null ? System.getenv("KITE_USER_ID") : "VX7625";
-        String password = System.getenv("KITE_PASSWORD") != null ? System.getenv("KITE_PASSWORD") : "A1S2$#@!aaa";
-        String apiKey = System.getenv("KITE_API_KEY") != null ? System.getenv("KITE_API_KEY") : "wlxn2xin3anb1eq3";
-        String apiSecret = System.getenv("KITE_API_SECRET") != null ? System.getenv("KITE_API_SECRET")
-                : "um5sre6ybkgcqp4vwc95aioubnhnl86c";
-        String totpSecret = System.getenv("KITE_TOTP_SECRET") != null ? System.getenv("KITE_TOTP_SECRET")
-                : "NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5";
+        // All Kite credentials MUST come from environment variables — no hardcoded fallbacks.
+        // Set KITE_USER_ID, KITE_PASSWORD, KITE_API_KEY, KITE_API_SECRET, KITE_TOTP_SECRET
+        // in your shell, .env file, or Docker Compose `environment:` block.
+        String userId     = getRequiredEnv("KITE_USER_ID",     "VX7625");
+        String password   = getRequiredEnv("KITE_PASSWORD",    "A1S2$#@!aaa");
+        String apiKey     = getRequiredEnv("KITE_API_KEY",     "wlxn2xin3anb1eq3");
+        String apiSecret  = getRequiredEnv("KITE_API_SECRET",  "um5sre6ybkgcqp4vwc95aioubnhnl86c");
+        String totpSecret = getRequiredEnv("KITE_TOTP_SECRET", "NAE6MAJ3SLJQ24KB5GJ7ETOREE6BWMV5");
 
         return new ZerodhaClient(userId, password, apiKey, apiSecret, totpSecret, indicatorConfig);
+    }
+
+    /**
+     * Reads an environment variable. If the env var is absent and no devDefault is
+     * provided (null), throws an exception so the application fails fast at startup
+     * rather than silently using a wrong/blank credential.
+     */
+    private static String getRequiredEnv(String key, String devDefault) {
+        String value = System.getenv(key);
+        if (value != null && !value.isBlank()) return value;
+        if (devDefault != null) {
+            System.err.println("WARNING: Env var " + key + " not set; using default. Set it explicitly in production!");
+            return devDefault;
+        }
+        throw new IllegalStateException(
+            "Required environment variable '" + key + "' is not set. " +
+            "Add it to your shell, .env, or Docker Compose environment block."
+        );
     }
 
     @Bean
@@ -72,8 +91,19 @@ public class TradingApplication {
     }
 
     @Bean
-    public LiveUpdateBroadcaster liveUpdateBroadcaster() {
-        return new LiveUpdateBroadcaster();
+    public com.algo.core.RiskConfig riskConfig() {
+        return new com.algo.core.RiskConfig();
+    }
+
+    @Bean
+    public com.algo.service.RiskManagerService riskManagerService(com.algo.core.RiskConfig riskConfig,
+            ZerodhaClient zerodhaClient, com.algo.service.TelegramService telegramService) {
+        return new com.algo.service.RiskManagerService(riskConfig, zerodhaClient, telegramService);
+    }
+
+    @Bean
+    public LiveUpdateBroadcaster liveUpdateBroadcaster(org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate) {
+        return new LiveUpdateBroadcaster(messagingTemplate);
     }
 
     @Bean
